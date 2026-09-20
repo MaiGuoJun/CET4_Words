@@ -192,11 +192,11 @@ function applyTheme() {
 
 async function loadContent() {
   const [wordResult, trackResult] = await Promise.allSettled([
-    fetch("./data/words.json?v=3").then((response) => {
+    fetch("./data/words.json?v=4").then((response) => {
       if (!response.ok) throw new Error("word data unavailable");
       return response.json();
     }),
-    fetch("./data/listening.json?v=3").then((response) => {
+    fetch("./data/listening.json?v=4").then((response) => {
       if (!response.ok) throw new Error("listening data unavailable");
       return response.json();
     })
@@ -1057,7 +1057,7 @@ async function init() {
   renderAll();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=3", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=4", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   window.setTimeout(checkBackupReminder, 900);
 }
