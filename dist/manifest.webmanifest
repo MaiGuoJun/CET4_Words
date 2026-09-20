@@ -1,0 +1,14 @@
+{
+  "name": "蘑菇酱四级",
+  "short_name": "蘑菇酱",
+  "description": "单词、听音辨词、短篇精听和专注计时组成的四级学习闭环。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
