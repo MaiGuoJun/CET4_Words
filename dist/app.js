@@ -3,6 +3,7 @@
 const STORAGE_KEY = "mogu-cet4-state-v1";
 const DB_NAME = "mogu-cet4-audio";
 const DB_VERSION = 1;
+const STABLE_LOCAL_ORIGIN = "http://127.0.0.1:4174";
 const WORD_PHASE_SECONDS = 15 * 60;
 const LISTEN_PHASE_SECONDS = 15 * 60;
 const EXAM_DEFAULT = "2026-12-12";
@@ -85,7 +86,57 @@ function loadState() {
 }
 
 function saveState() {
+  state.updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function storageScopeInfo() {
+  const { origin, hostname } = window.location;
+  if (origin === STABLE_LOCAL_ORIGIN) {
+    return {
+      label: "本机固定入口 · 4174",
+      hint: "这是固定的本地开发地址。以后继续使用这个地址，就会读取同一份学习记录。",
+      warning: false
+    };
+  }
+  if (hostname === "maiguojun.github.io") {
+    return {
+      label: "GitHub Pages 线上存档",
+      hint: "线上网址拥有独立存档，与本机预览互不覆盖。重新发布到相同网址后仍会读取这份记录。",
+      warning: false
+    };
+  }
+  if (["127.0.0.1", "localhost"].includes(hostname)) {
+    return {
+      label: `临时本机入口 · ${window.location.port || "默认端口"}`,
+      hint: "当前端口不是固定入口。换端口会看到另一份存档；建议改用 127.0.0.1:4174，或先导出备份。",
+      warning: true
+    };
+  }
+  return {
+    label: origin === "null" ? "临时文件地址" : origin,
+    hint: "这是一个独立存档空间。切换到其他网址前，请先导出备份。",
+    warning: true
+  };
+}
+
+function renderStorageScope() {
+  const scope = storageScopeInfo();
+  const container = $("#storageScope");
+  container.classList.toggle("warning", scope.warning);
+  $("#storageOrigin").textContent = scope.label;
+  $("#storageOrigin").title = window.location.origin;
+  $("#storageScopeHint").textContent = scope.hint;
+  $("#storageSummary").textContent = `当前地址已记录 ${Object.keys(state.wordStates).length} 个词 · ${learningDates().length} 个学习日`;
+}
+
+function warnTemporaryStorageScope() {
+  const scope = storageScopeInfo();
+  if (!scope.warning) return;
+  const warningKey = `${STORAGE_KEY}-scope-warning`;
+  if (sessionStorage.getItem(warningKey) === window.location.origin) return;
+  sessionStorage.setItem(warningKey, window.location.origin);
+  toast("当前是独立存档空间", "切换网址或端口前，请在设置页导出备份。" );
 }
 
 function localDateKey(date = new Date()) {
@@ -192,11 +243,11 @@ function applyTheme() {
 
 async function loadContent() {
   const [wordResult, trackResult] = await Promise.allSettled([
-    fetch("./data/words.json?v=4").then((response) => {
+    fetch("./data/words.json?v=5").then((response) => {
       if (!response.ok) throw new Error("word data unavailable");
       return response.json();
     }),
-    fetch("./data/listening.json?v=4").then((response) => {
+    fetch("./data/listening.json?v=5").then((response) => {
       if (!response.ok) throw new Error("listening data unavailable");
       return response.json();
     })
@@ -826,6 +877,7 @@ function renderSettings() {
   $("#recommendedTargetText").textContent = `当前系统建议 ${recommendedDailyTarget()} 个；你可在20–50之间调整。`;
   $("#lastBackup").textContent = state.lastBackupAt ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(state.lastBackupAt)) : "从未备份";
   $("#restoreRecovery").hidden = !localStorage.getItem(`${STORAGE_KEY}-recovery`);
+  renderStorageScope();
   renderVoices();
 }
 
@@ -966,6 +1018,12 @@ function bindEvents() {
     }
   });
   window.addEventListener("beforeunload", saveState);
+  window.addEventListener("storage", (event) => {
+    if (event.key !== STORAGE_KEY || !event.newValue) return;
+    state = loadState();
+    renderAll();
+    toast("存档已同步", "检测到同一网址下的其他页面更新了学习记录。" );
+  });
   matchMedia("(prefers-color-scheme: light)").addEventListener?.("change", () => { if (state.settings.theme === "system") applyTheme(); });
 }
 
@@ -1057,8 +1115,9 @@ async function init() {
   renderAll();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=4", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=5", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
+  warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
 }
 

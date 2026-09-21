@@ -306,6 +306,15 @@ input[type="range"] { accent-color: var(--accent); }
 .range-field > span { display: flex; justify-content: space-between; }
 .range-field output { color: var(--accent); font-weight: 800; }
 .field-hint { margin: -10px 0 0; color: var(--muted); font-size: 0.75rem; }
+.storage-scope { display: grid; gap: 8px; padding: 16px 18px; border: 1px solid var(--line-strong); border-radius: 15px; background: var(--accent-soft); }
+.storage-scope.warning { border-color: color-mix(in srgb, var(--warning) 58%, var(--line)); background: color-mix(in srgb, var(--warning) 10%, var(--panel-soft)); }
+.storage-scope-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; font-size: 0.875rem; }
+.storage-scope-head span { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); }
+.storage-scope-head i { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 5px color-mix(in srgb, var(--success) 12%, transparent); }
+.storage-scope.warning .storage-scope-head i { background: var(--warning); box-shadow: 0 0 0 5px color-mix(in srgb, var(--warning) 12%, transparent); }
+.storage-scope-head strong { overflow-wrap: anywhere; text-align: right; color: var(--text); }
+.storage-scope p { margin: 0; color: var(--text); font-size: 0.875rem; line-height: 1.65; }
+.storage-scope small { color: var(--muted); font-size: 0.75rem; }
 .backup-state { display: flex; justify-content: space-between; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8rem; }
 .backup-state strong { color: var(--text); }
 .about-section > p { margin: 0; color: var(--muted); line-height: 1.75; }
@@ -364,6 +373,8 @@ dialog::backdrop { background: rgba(1, 8, 16, 0.72); backdrop-filter: blur(7px);
   .player-card { min-height: 0; }
   .settings-grid { grid-template-columns: 1fr; }
   .settings-section.wide { grid-column: auto; }
+  .storage-scope-head { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .storage-scope-head strong { text-align: left; }
 }
 
 @media (max-width: 520px) {
