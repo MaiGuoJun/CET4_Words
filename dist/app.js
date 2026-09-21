@@ -92,6 +92,12 @@ let voiceSession = {
   hintMessage: "点击开始，说一句英语；本地 AI 会回答并由系统朗读。",
   transcript: ""
 };
+let textDictation = {
+  recognition: null,
+  listening: false,
+  baseText: "",
+  finalText: ""
+};
 let timer = {
   phase: "word",
   duration: WORD_PHASE_SECONDS,
@@ -942,6 +948,7 @@ function renderAI() {
     </div>` : "");
   $("#aiSend").disabled = aiPending;
   $("#aiInput").disabled = aiPending;
+  renderTextDictation();
   renderVoiceUI();
   requestAnimationFrame(() => { $("#aiMessages").scrollTop = $("#aiMessages").scrollHeight; });
 }
@@ -949,6 +956,7 @@ function renderAI() {
 function selectAIScenario(scenario) {
   if (!AI_SCENARIOS[scenario] || aiPending) return;
   if (isVoiceActive()) return toast("请先结束语音对话", "结束后再切换练习情景。" );
+  if (textDictation.listening) stopTextDictation(true);
   state.ai.scenario = scenario;
   currentAISession();
   saveState();
@@ -958,6 +966,7 @@ function selectAIScenario(scenario) {
 
 function resetAIConversation() {
   if (isVoiceActive()) return toast("请先结束语音对话");
+  if (textDictation.listening) stopTextDictation(true);
   const messages = currentAISession();
   if (messages.length > 1 && !window.confirm("重新开始会清空这个情景的对话记录，确认继续吗？")) return;
   state.ai.sessions[state.ai.scenario] = [];
@@ -1026,6 +1035,7 @@ function failVoiceSession(message, hint = "请检查麦克风权限，并确认�
 function setAIMode(mode) {
   if (!["text", "voice"].includes(mode) || state.ai.mode === mode) return;
   if (mode === "text" && isVoiceActive()) stopVoiceImmediately();
+  if (mode === "voice" && textDictation.listening) stopTextDictation(true);
   state.ai.mode = mode;
   saveState();
   renderAI();
@@ -1033,6 +1043,101 @@ function setAIMode(mode) {
 
 function speechRecognitionConstructor() {
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function renderTextDictation() {
+  const button = $("#aiDictation");
+  if (!button) return;
+  button.disabled = aiPending || state.ai.mode !== "text";
+  button.classList.toggle("listening", textDictation.listening);
+  button.setAttribute("aria-pressed", String(textDictation.listening));
+  button.textContent = textDictation.listening ? "停止听写" : "语音输入";
+}
+
+function joinDictationText(baseText, spokenText) {
+  const base = baseText.trim();
+  const spoken = spokenText.trim();
+  if (!base) return spoken.slice(0, 1000);
+  if (!spoken) return base.slice(0, 1000);
+  const separator = /[\s\n]$/.test(base) || /^[,.;!?，。！？]/.test(spoken) ? "" : " ";
+  return `${base}${separator}${spoken}`.slice(0, 1000);
+}
+
+function stopTextDictation(abort = false) {
+  const recognition = textDictation.recognition;
+  textDictation.recognition = null;
+  textDictation.listening = false;
+  renderTextDictation();
+  if (!recognition) return;
+  try {
+    if (abort) recognition.abort();
+    else recognition.stop();
+  } catch {
+    // The browser may have already ended the recognition session.
+  }
+}
+
+function startTextDictation() {
+  if (aiPending) return;
+  const Recognition = speechRecognitionConstructor();
+  if (!Recognition) return toast("当前浏览器不支持语音输入", "请使用最新版 Chrome 或 Edge，也可以继续键盘输入。" );
+
+  const input = $("#aiInput");
+  const recognition = new Recognition();
+  textDictation.recognition = recognition;
+  textDictation.listening = true;
+  textDictation.baseText = input.value.trim();
+  textDictation.finalText = "";
+  recognition.lang = state.settings.accent || "en-US";
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  renderTextDictation();
+
+  recognition.addEventListener("result", (event) => {
+    if (textDictation.recognition !== recognition) return;
+    let interimText = "";
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      const transcript = event.results[index][0]?.transcript || "";
+      if (event.results[index].isFinal) textDictation.finalText += transcript;
+      else interimText += transcript;
+    }
+    input.value = joinDictationText(textDictation.baseText, `${textDictation.finalText} ${interimText}`);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
+  recognition.addEventListener("error", (event) => {
+    if (textDictation.recognition !== recognition || event.error === "aborted") return;
+    if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+      toast("没有获得麦克风权限", "请在浏览器地址栏旁允许麦克风，然后重新点击语音输入。" );
+    } else if (event.error === "no-speech") {
+      toast("没有听清", "请靠近麦克风后再试一次。" );
+    } else if (event.error === "network") {
+      toast("语音识别联网失败", "请检查网络，或用最新版 Chrome / Edge 打开本应用后重试。" );
+    } else {
+      toast("语音输入暂时不可用", `浏览器返回：${event.error || "unknown"}`);
+    }
+  });
+  recognition.addEventListener("end", () => {
+    if (textDictation.recognition !== recognition) return;
+    textDictation.recognition = null;
+    textDictation.listening = false;
+    renderTextDictation();
+    input.focus();
+  });
+
+  try {
+    recognition.start();
+  } catch (error) {
+    textDictation.recognition = null;
+    textDictation.listening = false;
+    renderTextDictation();
+    toast("无法启动语音输入", error.message || "请重新点击语音输入。" );
+  }
+}
+
+function toggleTextDictation() {
+  if (textDictation.listening) stopTextDictation();
+  else startTextDictation();
 }
 
 function scheduleVoiceListening(delay = 450) {
@@ -1208,6 +1313,7 @@ async function checkAIStatus() {
 async function sendAIMessage(event) {
   event.preventDefault();
   if (aiPending) return;
+  if (textDictation.listening) stopTextDictation(true);
   const input = $("#aiInput");
   const content = input.value.trim();
   if (!content) return;
@@ -1371,7 +1477,10 @@ function checkBackupReminder() {
 
 function bindEvents() {
   $$("[data-view-target]").forEach((button) => button.addEventListener("click", () => {
-    if (currentView === "ai" && button.dataset.viewTarget !== "ai" && isVoiceActive()) stopVoiceImmediately();
+    if (currentView === "ai" && button.dataset.viewTarget !== "ai") {
+      if (isVoiceActive()) stopVoiceImmediately();
+      if (textDictation.listening) stopTextDictation(true);
+    }
     currentView = button.dataset.viewTarget;
     renderNavigation();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1427,6 +1536,7 @@ function bindEvents() {
   $$('[data-ai-scenario]').forEach((button) => button.addEventListener("click", () => selectAIScenario(button.dataset.aiScenario)));
   $$('[data-ai-mode]').forEach((button) => button.addEventListener("click", () => setAIMode(button.dataset.aiMode)));
   $("#aiReset").addEventListener("click", resetAIConversation);
+  $("#aiDictation").addEventListener("click", toggleTextDictation);
   $("#aiVoiceToggle").addEventListener("click", toggleVoiceConversation);
   $("#aiForm").addEventListener("submit", sendAIMessage);
   $("#aiInput").addEventListener("keydown", (event) => {
@@ -1458,7 +1568,7 @@ function bindEvents() {
       rateCurrentWord({ "1": "unknown", "2": "fuzzy", "3": "known" }[event.key]);
     }
   });
-  window.addEventListener("beforeunload", () => { stopVoiceImmediately(false); saveState(); });
+  window.addEventListener("beforeunload", () => { stopTextDictation(true); stopVoiceImmediately(false); saveState(); });
   window.addEventListener("storage", (event) => {
     if (event.key !== STORAGE_KEY || !event.newValue) return;
     state = loadState();
@@ -1558,7 +1668,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=8", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=9", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

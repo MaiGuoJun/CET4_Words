@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=8" />
+    <link rel="stylesheet" href="./styles.css?v=9" />
   </head>
   <body>
     <div class="app-shell">
@@ -242,9 +242,12 @@
                 <form class="ai-composer" id="aiForm">
                   <label class="sr-only" for="aiInput">输入英语或中文</label>
                   <textarea id="aiInput" rows="2" maxlength="1000" placeholder="Try: I usually study vocabulary in the library because…" required></textarea>
-                  <button class="button primary" type="submit" id="aiSend">发送</button>
+                  <div class="ai-composer-actions">
+                    <button class="button secondary ai-dictation-toggle" type="button" id="aiDictation" aria-pressed="false">语音输入</button>
+                    <button class="button primary" type="submit" id="aiSend">发送</button>
+                  </div>
                 </form>
-                <p class="ai-composer-hint">Enter 发送 · Shift + Enter 换行。可以先用中文问，AI 会帮你改成自然的英语。</p>
+                <p class="ai-composer-hint">语音输入只会填入文字，不会自动发送。Enter 发送 · Shift + Enter 换行。</p>
               </div>
 
               <div class="ai-voice-panel" id="aiVoicePanel" hidden>
@@ -348,6 +351,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=8" defer></script>
+    <script src="./app.js?v=9" defer></script>
   </body>
 </html>
