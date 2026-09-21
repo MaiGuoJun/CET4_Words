@@ -1,8 +1,7 @@
 name: Deploy to GitHub Pages
 
 on:
-  push:
-    branches: [main]
+  # 暂停自动发布：应用完善后再恢复 main 分支推送触发。
   workflow_dispatch:
 
 permissions:
