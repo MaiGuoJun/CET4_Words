@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=13" />
+    <link rel="stylesheet" href="./styles.css?v=16" />
   </head>
   <body>
     <div class="app-shell">
@@ -142,9 +142,10 @@
 
             <div class="word-workspace" id="wordWorkspace">
               <div class="word-meta"><span id="wordRank">词频 #—</span><span id="wordStatus">未分类</span></div>
-              <button class="speak-button" type="button" id="speakWord" aria-label="播放单词发音">▶ 发音</button>
+              <button class="speak-button" type="button" id="speakWord" aria-label="播放真人单词发音">▶ 真人发音</button>
               <h2 class="word" id="wordText">loading</h2>
               <p class="phonetic" id="wordPhonetic"></p>
+              <p class="pronunciation-source" id="pronunciationSource" aria-live="polite" hidden></p>
               <div class="word-reveal" id="wordReveal" hidden>
                 <p class="translation"><span class="part-of-speech" id="wordPartOfSpeech"></span><span id="wordTranslation"></span></p>
                 <div class="phrase-box" id="phraseBox" hidden>
@@ -307,8 +308,9 @@
 
             <section class="card settings-section">
               <div><p class="card-kicker">VOICE & APPEARANCE</p><h2>声音与外观</h2></div>
-              <label class="field"><span>英语发音</span><select id="voiceSelect"><option value="">使用设备默认英文声音</option></select></label>
+              <label class="field"><span>备用系统声音</span><select id="voiceSelect"><option value="">真人录音不可用时使用设备默认声音</option></select></label>
               <label class="field"><span>口音偏好</span><select id="accentSelect"><option value="en-US">美音</option><option value="en-GB">英音</option></select></label>
+              <p class="field-hint">单词优先播放在线词典的真人录音；没有录音或离线时，自动使用上面的设备声音。</p>
               <label class="field"><span>主题</span><select id="themeSelect"><option value="system">跟随系统</option><option value="dark">深色</option><option value="light">浅色</option></select></label>
             </section>
 
@@ -352,6 +354,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=13" defer></script>
+    <script src="./app.js?v=16" defer></script>
   </body>
 </html>

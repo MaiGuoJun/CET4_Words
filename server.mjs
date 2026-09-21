@@ -1,5 +1,6 @@
 import http from "node:http";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readFile, stat } from "node:fs/promises";
 
@@ -31,6 +32,9 @@ const MODEL = process.env.OLLAMA_MODEL || "qwen3.5:2b";
 const OLLAMA_URL = (process.env.OLLAMA_URL || "http://127.0.0.1:11434").replace(/\/$/, "");
 const MAX_BODY_BYTES = 48 * 1024;
 const rateLimits = new Map();
+const pronunciationCache = new Map();
+const pronunciationSources = new Map();
+const pronunciationAudioCache = new Map();
 
 const SCENARIOS = {
   campus: "campus life, classes, routines, and student clubs",
@@ -53,6 +57,160 @@ const CONTENT_TYPES = {
 function json(response, status, payload) {
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
   response.end(JSON.stringify(payload));
+}
+
+function trimCache(cache, maximum) {
+  while (cache.size > maximum) cache.delete(cache.keys().next().value);
+}
+
+function safeWikimediaUrl(value, kind = "page") {
+  try {
+    const url = new URL(value);
+    const allowed = kind === "audio"
+      ? url.hostname === "upload.wikimedia.org"
+      : url.hostname.endsWith(".wikimedia.org") || url.hostname.endsWith(".wiktionary.org");
+    return url.protocol === "https:" && allowed ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function chooseWikimediaPronunciation(data, word, accentCode) {
+  const pages = Array.isArray(data?.query?.pages) ? data.query.pages : [];
+  const normalizedWord = word.replace(/_/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  const base = `en-${accentCode}-${normalizedWord}`;
+  const suffixPattern = /^-(stressed|unstressed|noun|verb|adjective|adverb|1|2)$/;
+  const candidates = pages.map((page) => {
+    const info = page?.imageinfo?.[0];
+    const title = String(page?.title || "").replace(/^File:/i, "");
+    const stem = title.replace(/\.(ogg|oga|wav|mp3)$/i, "").replace(/_/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    const suffix = stem.startsWith(base) ? stem.slice(base.length) : "invalid";
+    if (stem !== base && !suffixPattern.test(suffix)) return null;
+    const audioUrl = safeWikimediaUrl(info?.url, "audio");
+    if (!audioUrl) return null;
+    return {
+      audioUrl,
+      sourceUrl: safeWikimediaUrl(info?.descriptionshorturl || info?.descriptionurl),
+      licenseName: String(info?.extmetadata?.LicenseShortName?.value || "").replace(/<[^>]*>/g, "").slice(0, 80),
+      accent: accentCode === "us" ? "en-US" : "en-GB",
+      exact: stem === base
+    };
+  }).filter(Boolean);
+  candidates.sort((left, right) => Number(right.exact) - Number(left.exact));
+  return candidates[0] || null;
+}
+
+async function fetchWikimediaPronunciation(word, accentCode) {
+  const params = new URLSearchParams({
+    action: "query",
+    generator: "search",
+    gsrsearch: `intitle:\"En-${accentCode}-${word}\"`,
+    gsrnamespace: "6",
+    gsrlimit: "12",
+    prop: "imageinfo",
+    iiprop: "url|extmetadata",
+    format: "json",
+    formatversion: "2",
+    origin: "*"
+  });
+  try {
+    const upstream = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, {
+      headers: { "User-Agent": "MoguCET4/1.0 personal-learning-app" },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!upstream.ok) return null;
+    return chooseWikimediaPronunciation(await upstream.json(), word, accentCode);
+  } catch {
+    return null;
+  }
+}
+
+async function findPronunciation(word, accent) {
+  const key = `${accent}:${word}`;
+  if (pronunciationCache.has(key)) return pronunciationCache.get(key);
+  const request = (async () => {
+    const preferred = accent === "en-GB" ? "uk" : "us";
+    const alternate = preferred === "us" ? "uk" : "us";
+    const preferredRequest = fetchWikimediaPronunciation(word, preferred);
+    const alternateRequest = fetchWikimediaPronunciation(word, alternate);
+    const clip = (await preferredRequest) || (await alternateRequest);
+    if (!clip) return null;
+    const token = createHash("sha256").update(clip.audioUrl).digest("hex").slice(0, 24);
+    pronunciationSources.set(token, clip.audioUrl);
+    trimCache(pronunciationSources, 250);
+    return { audio: `/api/pronunciation-audio/${token}`, sourceUrl: clip.sourceUrl, licenseName: clip.licenseName, accent: clip.accent };
+  })();
+  pronunciationCache.set(key, request);
+  const result = await request;
+  if (result) {
+    pronunciationCache.set(key, result);
+    trimCache(pronunciationCache, 250);
+  } else {
+    pronunciationCache.delete(key);
+  }
+  return result;
+}
+
+async function handlePronunciation(response, requestUrl) {
+  const word = String(requestUrl.searchParams.get("word") || "").trim().toLowerCase();
+  const accent = requestUrl.searchParams.get("accent") === "en-GB" ? "en-GB" : "en-US";
+  if (!/^[a-z][a-z' -]{0,60}$/i.test(word)) return json(response, 400, { error: "Invalid word" });
+  const result = await findPronunciation(word, accent);
+  return result ? json(response, 200, result) : json(response, 404, { error: "No recording found" });
+}
+
+async function loadPronunciationAudio(token) {
+  if (pronunciationAudioCache.has(token)) return pronunciationAudioCache.get(token);
+  const sourceUrl = pronunciationSources.get(token);
+  if (!sourceUrl) return null;
+  const request = (async () => {
+    const upstream = await fetch(sourceUrl, {
+      headers: { "User-Agent": "MoguCET4/1.0 personal-learning-app" },
+      signal: AbortSignal.timeout(12000)
+    });
+    if (!upstream.ok) throw new Error(`audio status ${upstream.status}`);
+    const contentType = upstream.headers.get("content-type") || "audio/ogg";
+    if (!/^(audio\/|application\/ogg)/i.test(contentType)) throw new Error("unexpected audio type");
+    const data = Buffer.from(await upstream.arrayBuffer());
+    if (!data.length || data.length > 4 * 1024 * 1024) throw new Error("unexpected audio size");
+    return { data, contentType };
+  })();
+  pronunciationAudioCache.set(token, request);
+  try {
+    const audio = await request;
+    pronunciationAudioCache.set(token, audio);
+    trimCache(pronunciationAudioCache, 60);
+    return audio;
+  } catch (error) {
+    pronunciationAudioCache.delete(token);
+    throw error;
+  }
+}
+
+async function handlePronunciationAudio(request, response, token) {
+  if (!/^[a-f0-9]{24}$/.test(token)) return json(response, 404, { error: "Recording not found" });
+  try {
+    const audio = await loadPronunciationAudio(token);
+    if (!audio) return json(response, 404, { error: "Recording expired; request the word again" });
+    const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.range || "");
+    const headers = { "Content-Type": audio.contentType, "Accept-Ranges": "bytes", "Cache-Control": "public, max-age=604800" };
+    if (range) {
+      const start = range[1] ? Math.min(Number(range[1]), audio.data.length - 1) : 0;
+      const end = range[2] ? Math.min(Number(range[2]), audio.data.length - 1) : audio.data.length - 1;
+      if (start > end) {
+        response.writeHead(416, { "Content-Range": `bytes */${audio.data.length}` });
+        return response.end();
+      }
+      const body = audio.data.subarray(start, end + 1);
+      response.writeHead(206, { ...headers, "Content-Length": body.length, "Content-Range": `bytes ${start}-${end}/${audio.data.length}` });
+      return response.end(request.method === "HEAD" ? undefined : body);
+    }
+    response.writeHead(200, { ...headers, "Content-Length": audio.data.length });
+    return response.end(request.method === "HEAD" ? undefined : audio.data);
+  } catch (error) {
+    console.error("Pronunciation audio failed:", error.message);
+    return json(response, 502, { error: "Recording temporarily unavailable" });
+  }
 }
 
 function allowRequest(request) {
@@ -208,6 +366,12 @@ async function serveStatic(request, response, requestUrl) {
 
 const server = http.createServer(async (request, response) => {
   const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+  if (["GET", "HEAD"].includes(request.method || "") && requestUrl.pathname === "/api/pronunciation") {
+    return handlePronunciation(response, requestUrl);
+  }
+  if (["GET", "HEAD"].includes(request.method || "") && requestUrl.pathname.startsWith("/api/pronunciation-audio/")) {
+    return handlePronunciationAudio(request, response, requestUrl.pathname.slice("/api/pronunciation-audio/".length));
+  }
   if (request.method === "GET" && requestUrl.pathname === "/api/ai-status") {
     return json(response, 200, await getLocalAIStatus());
   }

@@ -85,6 +85,9 @@ let currentTrack = null;
 let objectAudioUrl = null;
 let loopA = null;
 let loopB = null;
+const pronunciationCache = new Map();
+let pronunciationAudio = null;
+let pronunciationRequestId = 0;
 let aiPending = false;
 let aiServiceStatus = "checking";
 let voiceSession = {
@@ -459,6 +462,8 @@ function currentStudyQueue() {
 }
 
 function renderCurrentWord() {
+  stopPronunciationAudio();
+  renderPronunciationSource(null);
   const queue = currentStudyQueue();
   if (!queue.length) {
     renderEmptyStudy();
@@ -466,6 +471,7 @@ function renderCurrentWord() {
   }
   currentWordIndex %= queue.length;
   currentWord = queue[currentWordIndex];
+  setPronunciationButton("idle");
   const item = getWordState(currentWord);
   $("#wordText").textContent = currentWord.word;
   $("#wordPhonetic").textContent = currentWord.phonetic ? `/${currentWord.phonetic.replace(/^\/?|\/?$/g, "")}/` : "";
@@ -487,6 +493,8 @@ function renderCurrentWord() {
 }
 
 function renderEmptyStudy() {
+  stopPronunciationAudio();
+  renderPronunciationSource(null);
   currentWord = null;
   $("#wordText").textContent = "完成";
   $("#wordPhonetic").textContent = "这一组已经没有待处理单词";
@@ -495,6 +503,7 @@ function renderEmptyStudy() {
   $("#quizOptions").hidden = true;
   $("#revealWord").hidden = true;
   $("#studyPosition").textContent = "✓";
+  setPronunciationButton("idle");
 }
 
 function revealCurrentWord() {
@@ -550,11 +559,16 @@ function prepareQuiz() {
     word,
     type: word.phrase && index % 3 === 2 ? "phrase" : index % 3 === 1 ? "audio" : "meaning"
   }));
+  quizQueue.filter((question) => question.type === "audio").forEach((question) => {
+    void getPronunciationClip(question.word.word);
+  });
   currentWordIndex = 0;
   renderQuizQuestion();
 }
 
 function renderQuizQuestion() {
+  stopPronunciationAudio();
+  renderPronunciationSource(null);
   if (!quizQueue.length || currentWordIndex >= quizQueue.length) {
     currentQuiz = null;
     renderEmptyStudy();
@@ -564,6 +578,7 @@ function renderQuizQuestion() {
   }
   currentQuiz = quizQueue[currentWordIndex];
   currentWord = currentQuiz.word;
+  setPronunciationButton("idle");
   const shuffledWords = shuffle(words.filter((word) => word.word !== currentWord.word));
   const otherWords = shuffledWords.slice(0, 3);
   let options;
@@ -592,7 +607,10 @@ function renderQuizQuestion() {
   } else if (currentQuiz.type === "audio") {
     $("#wordText").textContent = "听发音，选单词";
     options = shuffle([currentWord, ...otherWords]).map((word) => ({ value: word.word, label: word.word }));
-    window.setTimeout(() => speak(currentWord.word), 250);
+    const quizWord = currentWord.word;
+    window.setTimeout(() => {
+      if (currentQuiz?.word.word === quizWord) void speak(quizWord);
+    }, 250);
   } else {
     $("#wordText").textContent = currentWord.phrase.replace(new RegExp(currentWord.word, "i"), "____");
     options = shuffle([currentWord, ...otherWords]).map((word) => ({ value: word.word, label: word.word }));
@@ -632,8 +650,219 @@ function shuffle(items) {
   return items;
 }
 
-function speak(text) {
-  if (!("speechSynthesis" in window) || !text) return toast("当前浏览器不支持系统发音");
+function normalizePronunciationUrl(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(String(value).startsWith("//") ? `https:${value}` : value, window.location.origin);
+    const allowedHost = url.origin === window.location.origin
+      || url.hostname === "api.dictionaryapi.dev"
+      || url.hostname.endsWith(".dictionaryapi.dev")
+      || url.hostname === "upload.wikimedia.org"
+      || url.hostname.endsWith(".wikimedia.org")
+      || url.hostname.endsWith(".wiktionary.org");
+    return url.protocol === "https:" && allowedHost ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function pronunciationAccent(phonetic) {
+  const clue = [phonetic.audio, phonetic.sourceUrl, phonetic.text].filter(Boolean).join(" ").toLowerCase();
+  if (/(?:^|[\/_-])(us|usa|american)(?:[\/_.-]|$)/.test(clue)) return "en-US";
+  if (/(?:^|[\/_-])(uk|gb|british)(?:[\/_.-]|$)/.test(clue)) return "en-GB";
+  if (/(?:^|[\/_-])(au|australia)(?:[\/_.-]|$)/.test(clue)) return "en-AU";
+  return "";
+}
+
+function choosePronunciationClip(entries) {
+  const preferredAccent = state.settings.accent || "en-US";
+  const clips = (Array.isArray(entries) ? entries : []).flatMap((entry) => (
+    Array.isArray(entry?.phonetics) ? entry.phonetics : []
+  )).map((phonetic) => ({
+    audio: normalizePronunciationUrl(phonetic.audio),
+    sourceUrl: normalizePronunciationUrl(phonetic.sourceUrl),
+    licenseName: typeof phonetic.license?.name === "string" ? phonetic.license.name : "",
+    accent: pronunciationAccent(phonetic)
+  })).filter((clip) => clip.audio);
+  clips.sort((left, right) => {
+    const score = (clip) => clip.accent === preferredAccent ? 3 : clip.accent ? 1 : 2;
+    return score(right) - score(left);
+  });
+  return clips[0] || null;
+}
+
+async function fetchPronunciationJson(url, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json" } });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function fetchDictionaryPronunciation(word) {
+  const data = await fetchPronunciationJson(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`, 5000);
+  return choosePronunciationClip(data);
+}
+
+async function fetchLocalPronunciation(word) {
+  const params = new URLSearchParams({ word, accent: state.settings.accent || "en-US" });
+  const data = await fetchPronunciationJson(`/api/pronunciation?${params}`, 10000);
+  if (!data) return null;
+  const audio = normalizePronunciationUrl(data.audio);
+  if (!audio) return null;
+  return {
+    audio,
+    sourceUrl: normalizePronunciationUrl(data.sourceUrl),
+    licenseName: typeof data.licenseName === "string" ? data.licenseName : "",
+    accent: data.accent === "en-GB" ? "en-GB" : data.accent === "en-US" ? "en-US" : ""
+  };
+}
+
+function chooseWikimediaClip(data, word, accentCode) {
+  const pages = Array.isArray(data?.query?.pages) ? data.query.pages : [];
+  const normalizedWord = word.replace(/_/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  const base = `en-${accentCode}-${normalizedWord}`;
+  const suffixPattern = /^-(stressed|unstressed|noun|verb|adjective|adverb|1|2)$/;
+  const candidates = pages.map((page) => {
+    const info = page?.imageinfo?.[0];
+    const title = String(page?.title || "").replace(/^File:/i, "");
+    const stem = title.replace(/\.(ogg|oga|wav|mp3)$/i, "").replace(/_/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    const suffix = stem.startsWith(base) ? stem.slice(base.length) : "invalid";
+    if (stem !== base && !suffixPattern.test(suffix)) return null;
+    return {
+      audio: normalizePronunciationUrl(info?.url),
+      sourceUrl: normalizePronunciationUrl(info?.descriptionshorturl || info?.descriptionurl),
+      licenseName: typeof info?.extmetadata?.LicenseShortName?.value === "string" ? info.extmetadata.LicenseShortName.value : "",
+      accent: accentCode === "us" ? "en-US" : "en-GB",
+      exact: stem === base
+    };
+  }).filter((clip) => clip?.audio);
+  candidates.sort((left, right) => Number(right.exact) - Number(left.exact));
+  return candidates[0] || null;
+}
+
+async function fetchWikimediaAccent(word, accentCode) {
+  if (!/^[a-z][a-z' -]{0,60}$/i.test(word)) return null;
+  const params = new URLSearchParams({
+    action: "query",
+    generator: "search",
+    gsrsearch: `intitle:\"En-${accentCode}-${word}\"`,
+    gsrnamespace: "6",
+    gsrlimit: "12",
+    prop: "imageinfo",
+    iiprop: "url|extmetadata",
+    format: "json",
+    formatversion: "2",
+    origin: "*"
+  });
+  const data = await fetchPronunciationJson(`https://commons.wikimedia.org/w/api.php?${params}`, 5000);
+  return chooseWikimediaClip(data, word, accentCode);
+}
+
+async function fetchWikimediaPronunciation(word) {
+  const preferred = state.settings.accent === "en-GB" ? "uk" : "us";
+  const alternate = preferred === "us" ? "uk" : "us";
+  const preferredRequest = fetchWikimediaAccent(word, preferred);
+  const alternateRequest = fetchWikimediaAccent(word, alternate);
+  return (await preferredRequest) || (await alternateRequest);
+}
+
+function firstAvailablePronunciation(requests) {
+  return new Promise((resolve) => {
+    let pending = requests.length;
+    let resolved = false;
+    requests.forEach((request) => Promise.resolve(request).then((clip) => {
+      if (clip && !resolved) {
+        resolved = true;
+        resolve(clip);
+        return;
+      }
+      pending -= 1;
+      if (!pending && !resolved) resolve(null);
+    }).catch(() => {
+      pending -= 1;
+      if (!pending && !resolved) resolve(null);
+    }));
+  });
+}
+
+async function getPronunciationClip(text) {
+  const word = String(text || "").trim().toLowerCase();
+  if (!word) return null;
+  const key = `${state.settings.accent || "en-US"}:${word}`;
+  if (pronunciationCache.has(key)) return pronunciationCache.get(key);
+  const isLocalApp = ["127.0.0.1", "localhost"].includes(window.location.hostname);
+  const request = isLocalApp
+    ? fetchLocalPronunciation(word)
+    : firstAvailablePronunciation([fetchDictionaryPronunciation(word), fetchWikimediaPronunciation(word)]);
+  pronunciationCache.set(key, request);
+  const clip = await request;
+  if (clip) pronunciationCache.set(key, clip);
+  else pronunciationCache.delete(key);
+  return clip;
+}
+
+function stopPronunciationAudio(invalidate = true) {
+  if (invalidate) pronunciationRequestId += 1;
+  if (pronunciationAudio) {
+    pronunciationAudio.pause();
+    pronunciationAudio.removeAttribute("src");
+    pronunciationAudio.load();
+    pronunciationAudio = null;
+  }
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+}
+
+function setPronunciationButton(status, text = currentWord?.word) {
+  const button = $("#speakWord");
+  if (!button) return;
+  const matchesCurrentWord = Boolean(text && currentWord?.word === text);
+  button.disabled = !currentWord;
+  button.classList.toggle("loading", status === "loading" && matchesCurrentWord);
+  button.setAttribute("aria-busy", status === "loading" && matchesCurrentWord ? "true" : "false");
+  button.textContent = status === "loading" && matchesCurrentWord
+    ? "获取真人发音…"
+    : status === "playing" && matchesCurrentWord
+      ? "正在播放…"
+      : "▶ 真人发音";
+}
+
+function renderPronunciationSource(clip) {
+  const container = $("#pronunciationSource");
+  if (!container) return;
+  container.replaceChildren();
+  if (!clip) {
+    container.hidden = true;
+    return;
+  }
+  const label = document.createElement("span");
+  const accent = clip.accent === "en-US" ? "美音" : clip.accent === "en-GB" ? "英音" : "";
+  label.textContent = clip.fallback ? "设备备用发音" : `真人录音${accent ? ` · ${accent}` : ""}`;
+  container.append(label);
+  if (!clip.fallback && clip.sourceUrl) {
+    const source = document.createElement("a");
+    source.href = clip.sourceUrl;
+    source.target = "_blank";
+    source.rel = "noopener noreferrer";
+    source.textContent = "查看来源 ↗";
+    container.append(source);
+  }
+  if (!clip.fallback && clip.licenseName) {
+    const license = document.createElement("small");
+    license.textContent = clip.licenseName;
+    container.append(license);
+  }
+  container.hidden = false;
+}
+
+function speakWithSystemVoice(text) {
+  if (!("speechSynthesis" in window) || !text) return false;
   speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = state.settings.accent || "en-US";
@@ -641,13 +870,59 @@ function speak(text) {
   if (selected) utterance.voice = selected;
   utterance.rate = 0.88;
   speechSynthesis.speak(utterance);
+  return true;
+}
+
+async function speak(text, { notifyFallback = false } = {}) {
+  if (!text) return;
+  stopPronunciationAudio(false);
+  const requestId = ++pronunciationRequestId;
+  setPronunciationButton("loading", text);
+  const clip = await getPronunciationClip(text);
+  if (requestId !== pronunciationRequestId) return;
+
+  if (clip) {
+    const audio = new Audio(clip.audio);
+    pronunciationAudio = audio;
+    audio.preload = "auto";
+    let hasFallenBack = false;
+    const fallback = () => {
+      if (hasFallenBack || requestId !== pronunciationRequestId) return;
+      hasFallenBack = true;
+      if (pronunciationAudio === audio) pronunciationAudio = null;
+      renderPronunciationSource({ fallback: true });
+      setPronunciationButton("idle", text);
+      const spoke = speakWithSystemVoice(text);
+      if (notifyFallback) toast(spoke ? "暂无可用的真人录音" : "真人录音播放失败", spoke ? "已改用设备备用发音。" : "请检查网络或更换浏览器后重试。");
+    };
+    audio.addEventListener("ended", () => {
+      if (pronunciationAudio === audio) pronunciationAudio = null;
+      if (requestId === pronunciationRequestId) setPronunciationButton("idle", text);
+    }, { once: true });
+    audio.addEventListener("error", fallback, { once: true });
+    try {
+      await audio.play();
+      if (requestId !== pronunciationRequestId || hasFallenBack) return;
+      renderPronunciationSource(clip);
+      setPronunciationButton("playing", text);
+      return;
+    } catch {
+      fallback();
+      return;
+    }
+  }
+
+  renderPronunciationSource({ fallback: true });
+  setPronunciationButton("idle", text);
+  const spoke = speakWithSystemVoice(text);
+  if (notifyFallback) toast(spoke ? "这个词暂时没有真人录音" : "当前无法播放发音", spoke ? "已改用设备备用发音。" : "请联网或更换支持发音的浏览器后重试。");
 }
 
 function renderVoices() {
   if (!("speechSynthesis" in window)) return;
   const select = $("#voiceSelect");
   const voices = speechSynthesis.getVoices().filter((voice) => /^en[-_]/i.test(voice.lang));
-  select.innerHTML = `<option value="">使用设备默认英文声音</option>${voices.map((voice) => `<option value="${escapeHtml(voice.voiceURI)}">${escapeHtml(voice.name)} · ${escapeHtml(voice.lang)}${voice.localService ? " · 本地" : ""}</option>`).join("")}`;
+  select.innerHTML = `<option value="">真人录音不可用时使用设备默认声音</option>${voices.map((voice) => `<option value="${escapeHtml(voice.voiceURI)}">${escapeHtml(voice.name)} · ${escapeHtml(voice.lang)}${voice.localService ? " · 本地" : ""}</option>`).join("")}`;
   select.value = state.settings.voiceURI || "";
 }
 
@@ -1511,6 +1786,7 @@ function bindEvents() {
       if (isVoiceActive()) stopVoiceImmediately();
       if (textDictation.listening) stopTextDictation(true);
     }
+    if (currentView === "today" && button.dataset.viewTarget !== "today") stopPronunciationAudio();
     currentView = button.dataset.viewTarget;
     renderNavigation();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1519,7 +1795,7 @@ function bindEvents() {
   $("#switchStudyMode").addEventListener("click", () => openStudy("learn"));
   $$("[data-study-mode]").forEach((button) => button.addEventListener("click", () => openStudy(button.dataset.studyMode)));
   $("#revealWord").addEventListener("click", revealCurrentWord);
-  $("#speakWord").addEventListener("click", () => speak(currentWord?.word));
+  $("#speakWord").addEventListener("click", () => { void speak(currentWord?.word, { notifyFallback: true }); });
   $$("[data-rating]").forEach((button) => button.addEventListener("click", () => rateCurrentWord(button.dataset.rating)));
   $("#quizOptions").addEventListener("click", (event) => {
     const button = event.target.closest("[data-answer]");
@@ -1582,7 +1858,7 @@ function bindEvents() {
   $("#dailyTargetInput").addEventListener("change", (event) => setDailyTarget(event.target.value));
   $("#examDateInput").addEventListener("change", (event) => { state.settings.examDate = event.target.value || EXAM_DEFAULT; state.settings.targetIsManual = false; applyRecommendedTarget(); saveState(); renderAll(); });
   $("#scoreGoalInput").addEventListener("change", (event) => { state.settings.scoreGoal = Math.max(425, Math.min(710, Number(event.target.value) || 500)); saveState(); renderProgress(); });
-  $("#accentSelect").addEventListener("change", (event) => { state.settings.accent = event.target.value; saveState(); });
+  $("#accentSelect").addEventListener("change", (event) => { state.settings.accent = event.target.value; stopPronunciationAudio(); renderPronunciationSource(null); saveState(); });
   $("#voiceSelect").addEventListener("change", (event) => { state.settings.voiceURI = event.target.value; saveState(); });
   $("#themeSelect").addEventListener("change", (event) => { state.settings.theme = event.target.value; saveState(); applyTheme(); });
   $("#themeQuick").addEventListener("click", () => { state.settings.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; saveState(); applyTheme(); renderSettings(); });
@@ -1598,7 +1874,7 @@ function bindEvents() {
       rateCurrentWord({ "1": "unknown", "2": "fuzzy", "3": "known" }[event.key]);
     }
   });
-  window.addEventListener("beforeunload", () => { stopTextDictation(true); stopVoiceImmediately(false); saveState(); });
+  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopTextDictation(true); stopVoiceImmediately(false); saveState(); });
   window.addEventListener("storage", (event) => {
     if (event.key !== STORAGE_KEY || !event.newValue) return;
     state = loadState();
@@ -1698,7 +1974,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=13", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=16", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
