@@ -28,8 +28,11 @@ await loadLocalEnvironment();
 
 const PORT = Number(process.env.PORT) || 4174;
 const MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
+const VOICE_MODEL = process.env.OPENAI_VOICE_MODEL || "gpt-realtime-2.1";
+const VOICE = process.env.OPENAI_VOICE || "marin";
 const API_KEY = process.env.OPENAI_API_KEY || "";
 const MAX_BODY_BYTES = 48 * 1024;
+const MAX_SDP_BYTES = 128 * 1024;
 const rateLimits = new Map();
 
 const SCENARIOS = {
@@ -65,15 +68,19 @@ function allowRequest(request) {
   return true;
 }
 
-async function readJsonBody(request) {
+async function readBody(request, maxBytes = MAX_BODY_BYTES) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new Error("PAYLOAD_TOO_LARGE");
+    if (size > maxBytes) throw new Error("PAYLOAD_TOO_LARGE");
     chunks.push(chunk);
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function readJsonBody(request) {
+  return JSON.parse((await readBody(request)) || "{}");
 }
 
 function outputText(response) {
@@ -166,6 +173,63 @@ Return only a valid JSON object with this shape: {"reply":"English reply","feedb
   }
 }
 
+function hasAllowedOrigin(request) {
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  return origin === `http://127.0.0.1:${PORT}` || origin === `http://localhost:${PORT}`;
+}
+
+async function handleVoiceSession(request, response, requestUrl) {
+  if (!hasAllowedOrigin(request)) return json(response, 403, { error: "不允许从当前网页创建语音会话。" });
+  if (!API_KEY) return json(response, 503, { error: "AI 服务尚未配置。请先设置 OPENAI_API_KEY 并重新启动应用。" });
+  if (!allowRequest(request)) return json(response, 429, { error: "语音连接有点频繁，请稍后再试。" });
+  if (!String(request.headers["content-type"] || "").startsWith("application/sdp")) {
+    return json(response, 415, { error: "语音连接格式不正确。" });
+  }
+
+  let sdp;
+  try {
+    sdp = (await readBody(request, MAX_SDP_BYTES)).trim();
+  } catch (error) {
+    return json(response, error.message === "PAYLOAD_TOO_LARGE" ? 413 : 400, { error: "语音连接内容过长或无效。" });
+  }
+  if (!sdp.startsWith("v=0")) return json(response, 400, { error: "浏览器没有提供有效的语音连接。" });
+
+  const scenarioKey = SCENARIOS[requestUrl.searchParams.get("scenario")] ? requestUrl.searchParams.get("scenario") : "campus";
+  const instructions = `You are the real-time English speaking tutor inside 蘑菇酱四级. The learner is Chinese, preparing for CET-4, aiming for 500+, and around B1 level. Practice ${SCENARIOS[scenarioKey]}. Speak clearly and slightly slower than normal conversation. Keep each turn to two to four short sentences, then ask exactly one question. Correct only the most important error naturally and briefly. Use mostly English. If the learner gets stuck or speaks Chinese, give a brief Chinese hint followed by a natural English sentence they can repeat. Do not use markdown or long lists.`;
+
+  try {
+    const form = new FormData();
+    form.set("sdp", sdp);
+    form.set("session", JSON.stringify({
+      type: "realtime",
+      model: VOICE_MODEL,
+      instructions,
+      audio: { output: { voice: VOICE } }
+    }));
+    const upstream = await fetch("https://api.openai.com/v1/realtime/calls", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${API_KEY}` },
+      body: form
+    });
+    const answer = await upstream.text();
+    if (!upstream.ok) {
+      console.error(`OpenAI voice session failed with status ${upstream.status}`);
+      const safeMessage = upstream.status === 401
+        ? "AI 密钥无效，请检查 .env.local 后重启应用。"
+        : upstream.status === 429
+          ? "语音服务额度不足或请求过快，请稍后再试。"
+          : "暂时无法创建语音对话，请稍后再试。";
+      return json(response, upstream.status === 401 ? 401 : 502, { error: safeMessage });
+    }
+    response.writeHead(201, { "Content-Type": "application/sdp", "Cache-Control": "no-store" });
+    response.end(answer);
+  } catch (error) {
+    console.error("OpenAI voice connection failed:", error.message);
+    return json(response, 502, { error: "无法连接语音服务，请检查网络后再试。" });
+  }
+}
+
 async function serveStatic(request, response, requestUrl) {
   let pathname;
   try {
@@ -199,9 +263,10 @@ async function serveStatic(request, response, requestUrl) {
 const server = http.createServer(async (request, response) => {
   const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
   if (request.method === "GET" && requestUrl.pathname === "/api/ai-status") {
-    return json(response, 200, { configured: Boolean(API_KEY), model: MODEL });
+    return json(response, 200, { configured: Boolean(API_KEY), model: MODEL, voiceModel: VOICE_MODEL });
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/ai-chat") return handleAIChat(request, response);
+  if (request.method === "POST" && requestUrl.pathname === "/api/voice-session") return handleVoiceSession(request, response, requestUrl);
   if (!["GET", "HEAD"].includes(request.method || "")) return json(response, 405, { error: "Method not allowed" });
   return serveStatic(request, response, requestUrl);
 });
