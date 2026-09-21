@@ -90,6 +90,7 @@ let pronunciationAudio = null;
 let pronunciationRequestId = 0;
 let aiPending = false;
 let aiServiceStatus = "checking";
+let aiTextSpeech = { utterance: null, messageIndex: null };
 let voiceSession = {
   state: "idle",
   active: false,
@@ -441,6 +442,7 @@ function startMissionFromState() {
 }
 
 function openStudy(mode) {
+  stopAITextSpeech();
   studyMode = mode;
   $("#studyPanel").hidden = false;
   $$("[data-study-mode]").forEach((button) => {
@@ -1243,12 +1245,15 @@ function renderAI() {
 
   $("#aiMessages").innerHTML = messages.map((message, index) => `
     <div class="ai-message ${message.role === "user" ? "user" : "assistant"} ${index === messages.length - 1 ? "latest" : ""}">
-      <div class="ai-message-label">${message.role === "user" ? "YOU" : "AI TUTOR"}</div>
+      <div class="ai-message-label-row">
+        <div class="ai-message-label">${message.role === "user" ? "YOU" : "AI TUTOR"}</div>
+        ${message.role === "assistant" ? `<button class="ai-message-speak" type="button" data-ai-speak-index="${index}" aria-label="朗读这条 AI 回复" aria-pressed="${aiTextSpeech.messageIndex === index ? "true" : "false"}">${aiTextSpeech.messageIndex === index ? "■ 停止" : "▶ 朗读"}</button>` : ""}
+      </div>
       <div class="ai-bubble">${escapeHtml(message.content || "")}</div>
       ${message.role === "assistant" ? renderAIFeedback(message.feedback) + renderAIVocabulary(message.vocabulary) : ""}
     </div>`).join("") + (aiPending ? `
     <div class="ai-message assistant latest" aria-label="AI 正在回复">
-      <div class="ai-message-label">AI TUTOR</div>
+      <div class="ai-message-label-row"><div class="ai-message-label">AI TUTOR</div></div>
       <div class="ai-bubble ai-typing"><i></i><i></i><i></i></div>
     </div>` : "");
   $("#aiSend").disabled = aiPending;
@@ -1261,6 +1266,7 @@ function renderAI() {
 function selectAIScenario(scenario) {
   if (!AI_SCENARIOS[scenario] || aiPending) return;
   if (isVoiceActive()) return toast("请先结束语音对话", "结束后再切换练习情景。" );
+  stopAITextSpeech();
   if (textDictation.listening) stopTextDictation(true);
   state.ai.scenario = scenario;
   currentAISession();
@@ -1272,6 +1278,7 @@ function selectAIScenario(scenario) {
 function resetAIConversation() {
   if (isVoiceActive()) return toast("请先结束语音对话");
   if (textDictation.listening) stopTextDictation(true);
+  stopAITextSpeech();
   const messages = currentAISession();
   if (messages.length > 1 && !window.confirm("重新开始会清空这个情景的对话记录，确认继续吗？")) return;
   state.ai.sessions[state.ai.scenario] = [];
@@ -1340,7 +1347,10 @@ function failVoiceSession(message, hint = "请检查麦克风权限，并确认�
 function setAIMode(mode) {
   if (!["text", "voice"].includes(mode) || state.ai.mode === mode) return;
   if (mode === "text" && isVoiceActive()) stopVoiceImmediately();
-  if (mode === "voice" && textDictation.listening) stopTextDictation(true);
+  if (mode === "voice") {
+    if (textDictation.listening) stopTextDictation(true);
+    stopAITextSpeech();
+  }
   state.ai.mode = mode;
   saveState();
   renderAI();
@@ -1443,6 +1453,51 @@ function startTextDictation() {
 function toggleTextDictation() {
   if (textDictation.listening) stopTextDictation();
   else startTextDictation();
+}
+
+function renderAITextSpeechButtons() {
+  $$("[data-ai-speak-index]").forEach((button) => {
+    const speaking = Number(button.dataset.aiSpeakIndex) === aiTextSpeech.messageIndex;
+    button.classList.toggle("speaking", speaking);
+    button.setAttribute("aria-pressed", String(speaking));
+    button.setAttribute("aria-label", speaking ? "停止朗读这条 AI 回复" : "朗读这条 AI 回复");
+    button.textContent = speaking ? "■ 停止" : "▶ 朗读";
+  });
+}
+
+function stopAITextSpeech(shouldRender = true) {
+  if ("speechSynthesis" in window && aiTextSpeech.utterance) speechSynthesis.cancel();
+  aiTextSpeech = { utterance: null, messageIndex: null };
+  if (shouldRender) renderAITextSpeechButtons();
+}
+
+function toggleAITextSpeech(messageIndex) {
+  const messages = currentAISession();
+  const message = messages[messageIndex];
+  if (!message || message.role !== "assistant" || !message.content) return;
+  if (!("speechSynthesis" in window)) return toast("当前浏览器不支持朗读", "请使用最新版 Chrome 或 Edge。" );
+  if (aiTextSpeech.messageIndex === messageIndex) {
+    stopAITextSpeech();
+    return;
+  }
+  if (textDictation.listening) stopTextDictation(true);
+  stopPronunciationAudio();
+  stopAITextSpeech(false);
+  const utterance = new SpeechSynthesisUtterance(message.content);
+  utterance.lang = state.settings.accent || "en-US";
+  utterance.rate = 0.88;
+  const selected = speechSynthesis.getVoices().find((voice) => voice.voiceURI === state.settings.voiceURI);
+  if (selected) utterance.voice = selected;
+  aiTextSpeech = { utterance, messageIndex };
+  const finish = () => {
+    if (aiTextSpeech.utterance !== utterance) return;
+    aiTextSpeech = { utterance: null, messageIndex: null };
+    renderAITextSpeechButtons();
+  };
+  utterance.addEventListener("end", finish, { once: true });
+  utterance.addEventListener("error", finish, { once: true });
+  renderAITextSpeechButtons();
+  speechSynthesis.speak(utterance);
 }
 
 function scheduleVoiceListening(delay = 450) {
@@ -1618,6 +1673,7 @@ async function checkAIStatus() {
 async function sendAIMessage(event) {
   event.preventDefault();
   if (aiPending) return;
+  stopAITextSpeech();
   if (textDictation.listening) stopTextDictation(true);
   const input = $("#aiInput");
   const content = input.value.trim();
@@ -1785,6 +1841,7 @@ function bindEvents() {
     if (currentView === "ai" && button.dataset.viewTarget !== "ai") {
       if (isVoiceActive()) stopVoiceImmediately();
       if (textDictation.listening) stopTextDictation(true);
+      stopAITextSpeech();
     }
     if (currentView === "today" && button.dataset.viewTarget !== "today") stopPronunciationAudio();
     currentView = button.dataset.viewTarget;
@@ -1842,6 +1899,10 @@ function bindEvents() {
   $$('[data-ai-scenario]').forEach((button) => button.addEventListener("click", () => selectAIScenario(button.dataset.aiScenario)));
   $$('[data-ai-mode]').forEach((button) => button.addEventListener("click", () => setAIMode(button.dataset.aiMode)));
   $("#aiReset").addEventListener("click", resetAIConversation);
+  $("#aiMessages").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-ai-speak-index]");
+    if (button) toggleAITextSpeech(Number(button.dataset.aiSpeakIndex));
+  });
   $("#aiDictation").addEventListener("click", toggleTextDictation);
   $("#aiVoiceToggle").addEventListener("click", toggleVoiceConversation);
   $("#aiForm").addEventListener("submit", sendAIMessage);
@@ -1874,7 +1935,7 @@ function bindEvents() {
       rateCurrentWord({ "1": "unknown", "2": "fuzzy", "3": "known" }[event.key]);
     }
   });
-  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopTextDictation(true); stopVoiceImmediately(false); saveState(); });
+  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopAITextSpeech(false); stopTextDictation(true); stopVoiceImmediately(false); saveState(); });
   window.addEventListener("storage", (event) => {
     if (event.key !== STORAGE_KEY || !event.newValue) return;
     state = loadState();
@@ -1974,7 +2035,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=16", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=17", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
