@@ -27,7 +27,7 @@ if (words.length !== 4023) throw new Error(`Expected 4023 unique CET-4 words, fo
 if (wordNames.size !== words.length) throw new Error("Word list contains duplicates");
 if (words.filter((item) => item.phrase).length !== 100) throw new Error("Expected exactly 100 curated phrases");
 if (words.filter((item) => item.phonetic).length < 3980) throw new Error("Too many words are missing phonetics");
-if (words.some((item) => !item.translation || !Number.isFinite(item.rank))) throw new Error("Word data has missing required fields");
+if (words.some((item) => !item.translation || !item.partOfSpeech || !Number.isFinite(item.rank))) throw new Error("Word data has missing required fields");
 
 const tracks = JSON.parse(fs.readFileSync(path.join(dist, "data", "listening.json"), "utf8"));
 if (tracks.length !== 3) throw new Error("Expected three built-in listening tracks");

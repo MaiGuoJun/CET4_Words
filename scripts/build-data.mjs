@@ -161,6 +161,32 @@ function normalizeTranslation(value) {
     .slice(0, 240);
 }
 
+const partOfSpeechFallbacks = {
+  online: "adj. / adv.",
+  app: "n.",
+  laptop: "n.",
+  download: "n. / v.",
+  cyberspace: "n.",
+  upload: "n. / v.",
+  "according to": "prep.",
+  "air-conditioning": "n.",
+  am: "v.",
+  "cell-phone": "n.",
+  internet: "n.",
+  "ought to": "aux.",
+  "résumé": "n."
+};
+
+function extractPartsOfSpeech(value, word) {
+  const labels = [];
+  const normalized = { n: "n.", pl: "n.", vt: "v.", vi: "v.", v: "v.", a: "adj.", adj: "adj.", adv: "adv.", prep: "prep.", pron: "pron.", num: "num.", conj: "conj.", interj: "interj.", int: "interj.", aux: "aux.", art: "art." };
+  for (const match of String(value || "").matchAll(/(?:^|；|\\r；)(n|pl|vt|vi|v|a|adj|adv|prep|pron|num|conj|interj|int|aux|art)\./g)) {
+    const label = normalized[match[1]];
+    if (label && !labels.includes(label)) labels.push(label);
+  }
+  return labels.join(" / ") || partOfSpeechFallbacks[word.toLocaleLowerCase("en-US")] || "";
+}
+
 if (!fs.existsSync(cetPath) || !fs.existsSync(ecdictPath)) {
   throw new Error("Missing source data. Download CETVocabulary and ECDICT into work/sources first.");
 }
@@ -201,6 +227,7 @@ const output = cet4.filter((row) => {
   return {
     word: row["单词"],
     phonetic: extra.phonetic || "",
+    partOfSpeech: extractPartsOfSpeech(extra.translation, row["单词"]),
     translation: coreTranslation || normalizeTranslation(extra.translation),
     brief: coreTranslation,
     rank: row["序号"],

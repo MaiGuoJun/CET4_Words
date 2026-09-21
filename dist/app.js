@@ -9,16 +9,16 @@ const LISTEN_PHASE_SECONDS = 15 * 60;
 const EXAM_DEFAULT = "2026-12-12";
 
 const fallbackWords = [
-  { word: "access", phonetic: "ˈækses", translation: "进入、存取", frequency: 86, phrase: "have access to", phraseMeaning: "有权使用；可以接近" },
-  { word: "available", phonetic: "əˈveɪləbl", translation: "可获得的、可用的", frequency: 121, phrase: "be available to", phraseMeaning: "可被……获得或使用" },
-  { word: "approach", phonetic: "əˈprəʊtʃ", translation: "接近、方法", frequency: 174, phrase: "an approach to", phraseMeaning: "处理……的方法" },
-  { word: "benefit", phonetic: "ˈbenɪfɪt", translation: "益处、好处", frequency: 193, phrase: "benefit from", phraseMeaning: "从……中受益" },
-  { word: "concern", phonetic: "kənˈsɜːn", translation: "关心、涉及", frequency: 212, phrase: "be concerned about", phraseMeaning: "担心；关注" },
-  { word: "contribute", phonetic: "kənˈtrɪbjuːt", translation: "贡献", frequency: 286, phrase: "contribute to", phraseMeaning: "有助于；促成" },
-  { word: "determine", phonetic: "dɪˈtɜːmɪn", translation: "决定", frequency: 302, phrase: "be determined to", phraseMeaning: "决心做……" },
-  { word: "essential", phonetic: "ɪˈsenʃl", translation: "必要的、必不可少的", frequency: 337, phrase: "be essential to", phraseMeaning: "对……至关重要" },
-  { word: "maintain", phonetic: "meɪnˈteɪn", translation: "保持、维持", frequency: 468, phrase: "maintain a balance", phraseMeaning: "保持平衡" },
-  { word: "responsible", phonetic: "rɪˈspɒnsəbl", translation: "负责的", frequency: 614, phrase: "be responsible for", phraseMeaning: "对……负责；是……的原因" }
+  { word: "access", phonetic: "ˈækses", partOfSpeech: "n. / v.", translation: "进入、存取", frequency: 86, phrase: "have access to", phraseMeaning: "有权使用；可以接近" },
+  { word: "available", phonetic: "əˈveɪləbl", partOfSpeech: "adj.", translation: "可获得的、可用的", frequency: 121, phrase: "be available to", phraseMeaning: "可被……获得或使用" },
+  { word: "approach", phonetic: "əˈprəʊtʃ", partOfSpeech: "n. / v.", translation: "接近、方法", frequency: 174, phrase: "an approach to", phraseMeaning: "处理……的方法" },
+  { word: "benefit", phonetic: "ˈbenɪfɪt", partOfSpeech: "n. / v.", translation: "益处、好处", frequency: 193, phrase: "benefit from", phraseMeaning: "从……中受益" },
+  { word: "concern", phonetic: "kənˈsɜːn", partOfSpeech: "n. / v.", translation: "关心、涉及", frequency: 212, phrase: "be concerned about", phraseMeaning: "担心；关注" },
+  { word: "contribute", phonetic: "kənˈtrɪbjuːt", partOfSpeech: "v.", translation: "贡献", frequency: 286, phrase: "contribute to", phraseMeaning: "有助于；促成" },
+  { word: "determine", phonetic: "dɪˈtɜːmɪn", partOfSpeech: "v.", translation: "决定", frequency: 302, phrase: "be determined to", phraseMeaning: "决心做……" },
+  { word: "essential", phonetic: "ɪˈsenʃl", partOfSpeech: "adj.", translation: "必要的、必不可少的", frequency: 337, phrase: "be essential to", phraseMeaning: "对……至关重要" },
+  { word: "maintain", phonetic: "meɪnˈteɪn", partOfSpeech: "v.", translation: "保持、维持", frequency: 468, phrase: "maintain a balance", phraseMeaning: "保持平衡" },
+  { word: "responsible", phonetic: "rɪˈspɒnsəbl", partOfSpeech: "adj.", translation: "负责的", frequency: 614, phrase: "be responsible for", phraseMeaning: "对……负责；是……的原因" }
 ];
 
 const AI_SCENARIOS = {
@@ -297,7 +297,7 @@ function applyTheme() {
 
 async function loadContent() {
   const [wordResult, trackResult] = await Promise.allSettled([
-    fetch("./data/words.json?v=7").then((response) => {
+    fetch("./data/words.json?v=8").then((response) => {
       if (!response.ok) throw new Error("word data unavailable");
       return response.json();
     }),
@@ -461,6 +461,7 @@ function renderCurrentWord() {
   const item = getWordState(currentWord);
   $("#wordText").textContent = currentWord.word;
   $("#wordPhonetic").textContent = currentWord.phonetic ? `/${currentWord.phonetic.replace(/^\/?|\/?$/g, "")}/` : "";
+  $("#wordPartOfSpeech").textContent = currentWord.partOfSpeech || "";
   $("#wordTranslation").textContent = currentWord.translation || "暂无释义";
   $("#wordRank").textContent = `词频 #${currentWord.rank || currentWord.frequency || "—"}`;
   $("#wordStatus").textContent = item ? ({ known: "认识", fuzzy: "模糊", unknown: "不认识" }[item.status] || "待复习") : "未分类";
@@ -573,7 +574,10 @@ function renderQuizQuestion() {
       usedMeanings.add(meaning);
       return true;
     }).slice(0, 3);
-    options = shuffle([currentWord, ...meaningDistractors]).map((word) => ({ value: word.word, label: word.translation || word.word }));
+    options = shuffle([currentWord, ...meaningDistractors]).map((word) => ({
+      value: word.word,
+      label: `${word.partOfSpeech ? `${word.partOfSpeech} ` : ""}${word.translation || word.word}`
+    }));
   } else if (currentQuiz.type === "audio") {
     $("#wordText").textContent = "听发音，选单词";
     options = shuffle([currentWord, ...otherWords]).map((word) => ({ value: word.word, label: word.word }));
@@ -1681,7 +1685,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=11", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=12", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

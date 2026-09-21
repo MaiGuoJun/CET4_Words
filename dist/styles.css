@@ -223,7 +223,9 @@ h2 { margin-bottom: 0; font-size: 1.25rem; letter-spacing: -0.02em; }
 .word { margin-top: 16px; font-size: clamp(3rem, 8vw, 6.5rem); line-height: 1; letter-spacing: -0.055em; overflow-wrap: anywhere; }
 .phonetic { min-height: 1.5em; margin: 10px 0 0; color: var(--muted); font-size: 1rem; }
 .word-reveal { margin-top: 26px; }
-.translation { margin-bottom: 18px; font-size: clamp(1.1rem, 2vw, 1.4rem); line-height: 1.65; }
+.translation { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 9px; margin-bottom: 18px; font-size: clamp(1.1rem, 2vw, 1.4rem); line-height: 1.65; }
+.part-of-speech { padding: 3px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--accent-soft); color: var(--accent); font: 700 0.72rem var(--font-ui); letter-spacing: 0.025em; }
+.part-of-speech:empty { display: none; }
 .phrase-box { max-width: 520px; margin: 0 auto; padding: 15px 18px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--accent-soft); text-align: left; }
 .phrase-box span { display: block; margin-bottom: 5px; color: var(--accent); font-size: 0.68rem; letter-spacing: 0.12em; }
 .phrase-box strong { font-size: 1rem; }
