@@ -1,4 +1,4 @@
-const CACHE = "mogu-cet4-v5";
+const CACHE = "mogu-cet4-v6";
 const CORE = [
   "./",
   "./index.html",
@@ -25,6 +25,7 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.origin !== location.origin) return;
+  if (url.pathname.startsWith("/api/")) return;
   const isAudio = url.pathname.endsWith(".mp3");
   if (isAudio) {
     event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));

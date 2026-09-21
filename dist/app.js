@@ -21,6 +21,31 @@ const fallbackWords = [
   { word: "responsible", phonetic: "rɪˈspɒnsəbl", translation: "adj. 负责的；作为原因的", frequency: 614, phrase: "be responsible for", phraseMeaning: "对……负责；是……的原因" }
 ];
 
+const AI_SCENARIOS = {
+  campus: {
+    title: "校园生活",
+    goal: "围绕校园日常自然交流，并学会补充理由。",
+    opening: "Let’s talk about campus life. What is one part of your daily routine at school that you enjoy?"
+  },
+  travel: {
+    title: "旅行出行",
+    goal: "练习问路、交通、住宿等真实出行情景。",
+    opening: "Imagine you are planning a short trip. Where would you like to go, and how would you travel there?"
+  },
+  interview: {
+    title: "面试表达",
+    goal: "清楚介绍自己，并用具体例子说明个人经历。",
+    opening: "Welcome! Please introduce yourself and tell me about one strength that would help you in a student club."
+  },
+  technology: {
+    title: "科技话题",
+    goal: "围绕常见四级科技话题表达观点、理由与例子。",
+    opening: "Technology has changed the way students learn. Which change has helped you the most, and why?"
+  }
+};
+
+const defaultAIState = () => ({ scenario: "campus", sessions: {} });
+
 const defaultState = () => ({
   version: 1,
   settings: {
@@ -37,6 +62,7 @@ const defaultState = () => ({
   wordStates: {},
   daily: {},
   completedListening: [],
+  ai: defaultAIState(),
   lastBackupAt: null,
   createdAt: new Date().toISOString()
 });
@@ -54,6 +80,8 @@ let currentTrack = null;
 let objectAudioUrl = null;
 let loopA = null;
 let loopB = null;
+let aiPending = false;
+let aiServiceStatus = "checking";
 let timer = {
   phase: "word",
   duration: WORD_PHASE_SECONDS,
@@ -78,7 +106,12 @@ function loadState() {
       settings: { ...base.settings, ...(parsed.settings || {}) },
       wordStates: parsed.wordStates || {},
       daily: parsed.daily || {},
-      completedListening: parsed.completedListening || []
+      completedListening: parsed.completedListening || [],
+      ai: {
+        ...base.ai,
+        ...(parsed.ai || {}),
+        sessions: { ...(parsed.ai?.sessions || {}) }
+      }
     };
   } catch {
     return defaultState();
@@ -243,11 +276,11 @@ function applyTheme() {
 
 async function loadContent() {
   const [wordResult, trackResult] = await Promise.allSettled([
-    fetch("./data/words.json?v=5").then((response) => {
+    fetch("./data/words.json?v=6").then((response) => {
       if (!response.ok) throw new Error("word data unavailable");
       return response.json();
     }),
-    fetch("./data/listening.json?v=5").then((response) => {
+    fetch("./data/listening.json?v=6").then((response) => {
       if (!response.ok) throw new Error("listening data unavailable");
       return response.json();
     })
@@ -272,6 +305,7 @@ function renderNavigation() {
   });
   if (currentView === "progress") renderProgress();
   if (currentView === "listening") renderTrackList();
+  if (currentView === "ai") renderAI();
 }
 
 function renderHeader() {
@@ -822,6 +856,154 @@ async function importAudio(event) {
   }
 }
 
+function ensureAIState() {
+  if (!state.ai || typeof state.ai !== "object") state.ai = defaultAIState();
+  if (!AI_SCENARIOS[state.ai.scenario]) state.ai.scenario = "campus";
+  if (!state.ai.sessions || typeof state.ai.sessions !== "object" || Array.isArray(state.ai.sessions)) state.ai.sessions = {};
+}
+
+function currentAISession() {
+  ensureAIState();
+  const scenario = state.ai.scenario;
+  if (!Array.isArray(state.ai.sessions[scenario]) || state.ai.sessions[scenario].length === 0) {
+    state.ai.sessions[scenario] = [{
+      role: "assistant",
+      content: AI_SCENARIOS[scenario].opening,
+      feedback: [],
+      vocabulary: [],
+      createdAt: new Date().toISOString()
+    }];
+    saveState();
+  }
+  return state.ai.sessions[scenario];
+}
+
+function renderAIFeedback(feedback = []) {
+  const items = Array.isArray(feedback) ? feedback.slice(0, 2) : [];
+  if (!items.length) return "";
+  return `<div class="ai-feedback">${items.map((item) => `
+    <div class="ai-feedback-card">
+      ${item.original ? `<del>${escapeHtml(item.original)}</del>` : ""}
+      <strong>${escapeHtml(item.correction || "")}</strong>
+      <p>${escapeHtml(item.reason || "")}</p>
+    </div>`).join("")}</div>`;
+}
+
+function renderAIVocabulary(vocabulary = []) {
+  const items = Array.isArray(vocabulary) ? vocabulary.slice(0, 2) : [];
+  if (!items.length) return "";
+  return `<div class="ai-vocabulary">${items.map((item) => `
+    <div class="ai-vocab-card">
+      <strong>${escapeHtml(item.word || "")}</strong><span>${escapeHtml(item.meaning || "")}</span>
+      ${item.example ? `<p>${escapeHtml(item.example)}</p>` : ""}
+    </div>`).join("")}</div>`;
+}
+
+function renderAI() {
+  const messages = currentAISession();
+  const scenario = AI_SCENARIOS[state.ai.scenario];
+  $("#aiScenarioTitle").textContent = scenario.title;
+  $("#aiScenarioGoal").textContent = scenario.goal;
+  $("#aiTurnCount").textContent = `${messages.filter((message) => message.role === "user").length} 轮`;
+  $$('[data-ai-scenario]').forEach((button) => button.classList.toggle("active", button.dataset.aiScenario === state.ai.scenario));
+
+  const status = $("#aiStatus");
+  status.classList.toggle("ready", aiServiceStatus === "ready");
+  status.classList.toggle("offline", aiServiceStatus === "offline");
+  status.textContent = aiServiceStatus === "ready" ? "AI 服务已就绪" : aiServiceStatus === "offline" ? "需要配置 AI 服务" : "正在检查 AI 服务";
+
+  $("#aiMessages").innerHTML = messages.map((message) => `
+    <div class="ai-message ${message.role === "user" ? "user" : "assistant"}">
+      <div class="ai-message-label">${message.role === "user" ? "YOU" : "AI TUTOR"}</div>
+      <div class="ai-bubble">${escapeHtml(message.content || "")}</div>
+      ${message.role === "assistant" ? renderAIFeedback(message.feedback) + renderAIVocabulary(message.vocabulary) : ""}
+    </div>`).join("") + (aiPending ? `
+    <div class="ai-message assistant" aria-label="AI 正在回复">
+      <div class="ai-message-label">AI TUTOR</div>
+      <div class="ai-bubble ai-typing"><i></i><i></i><i></i></div>
+    </div>` : "");
+  $("#aiSend").disabled = aiPending;
+  $("#aiInput").disabled = aiPending;
+  requestAnimationFrame(() => { $("#aiMessages").scrollTop = $("#aiMessages").scrollHeight; });
+}
+
+function selectAIScenario(scenario) {
+  if (!AI_SCENARIOS[scenario] || aiPending) return;
+  state.ai.scenario = scenario;
+  currentAISession();
+  saveState();
+  $("#aiError").hidden = true;
+  renderAI();
+}
+
+function resetAIConversation() {
+  const messages = currentAISession();
+  if (messages.length > 1 && !window.confirm("重新开始会清空这个情景的对话记录，确认继续吗？")) return;
+  state.ai.sessions[state.ai.scenario] = [];
+  currentAISession();
+  saveState();
+  $("#aiError").hidden = true;
+  renderAI();
+  $("#aiInput").focus();
+}
+
+async function checkAIStatus() {
+  try {
+    const response = await fetch("./api/ai-status", { cache: "no-store" });
+    if (!response.ok) throw new Error("status unavailable");
+    const result = await response.json();
+    aiServiceStatus = result.configured ? "ready" : "offline";
+  } catch {
+    aiServiceStatus = "offline";
+  }
+  renderAI();
+}
+
+async function sendAIMessage(event) {
+  event.preventDefault();
+  if (aiPending) return;
+  const input = $("#aiInput");
+  const content = input.value.trim();
+  if (!content) return;
+
+  const messages = currentAISession();
+  const history = messages.slice(-12).map(({ role, content: text }) => ({ role, content: text }));
+  messages.push({ role: "user", content, createdAt: new Date().toISOString() });
+  if (messages.length > 40) messages.splice(1, messages.length - 40);
+  saveState();
+  input.value = "";
+  aiPending = true;
+  $("#aiError").hidden = true;
+  renderAI();
+
+  try {
+    const response = await fetch("./api/ai-chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scenario: state.ai.scenario, history, message: content })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "AI 暂时无法回复，请稍后重试。");
+    messages.push({
+      role: "assistant",
+      content: String(result.reply || "Let’s try another way. Could you tell me a little more?"),
+      feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 2) : [],
+      vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.slice(0, 2) : [],
+      createdAt: new Date().toISOString()
+    });
+    aiServiceStatus = "ready";
+    saveState();
+  } catch (error) {
+    const errorBox = $("#aiError");
+    errorBox.textContent = error.message || "AI 暂时无法回复，请稍后重试。";
+    errorBox.hidden = false;
+  } finally {
+    aiPending = false;
+    renderAI();
+    input.focus();
+  }
+}
+
 function learningDates() {
   return Object.entries(state.daily).filter(([, value]) => (value.focusSeconds || 0) > 0 || (value.learned || 0) > 0 || (value.screened || 0) > 0).map(([date]) => date).sort();
 }
@@ -995,6 +1177,16 @@ function bindEvents() {
   $("#openImportAudio").addEventListener("click", () => $("#audioImportDialog").showModal());
   $("#audioImportForm").addEventListener("submit", importAudio);
 
+  $$('[data-ai-scenario]').forEach((button) => button.addEventListener("click", () => selectAIScenario(button.dataset.aiScenario)));
+  $("#aiReset").addEventListener("click", resetAIConversation);
+  $("#aiForm").addEventListener("submit", sendAIMessage);
+  $("#aiInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      $("#aiForm").requestSubmit();
+    }
+  });
+
   $("#dailyTargetInput").addEventListener("input", (event) => {
     $("#settingsTargetOutput").textContent = event.target.value;
   });
@@ -1031,6 +1223,7 @@ function renderAll() {
   renderHeader();
   renderToday();
   renderTimer();
+  renderAI();
   renderProgress();
   renderSettings();
   renderNavigation();
@@ -1113,9 +1306,10 @@ async function init() {
   bindEvents();
   await loadContent();
   renderAll();
+  checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=5", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=6", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

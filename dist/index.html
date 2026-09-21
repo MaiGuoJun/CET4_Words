@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=5" />
+    <link rel="stylesheet" href="./styles.css?v=6" />
   </head>
   <body>
     <div class="app-shell">
@@ -37,11 +37,14 @@
           <button class="nav-item" type="button" data-view-target="listening">
             <span class="nav-index">02</span><span>听力</span>
           </button>
+          <button class="nav-item" type="button" data-view-target="ai">
+            <span class="nav-index">03</span><span>AI 对话</span>
+          </button>
           <button class="nav-item" type="button" data-view-target="progress">
-            <span class="nav-index">03</span><span>进度</span>
+            <span class="nav-index">04</span><span>进度</span>
           </button>
           <button class="nav-item" type="button" data-view-target="settings">
-            <span class="nav-index">04</span><span>设置</span>
+            <span class="nav-index">05</span><span>设置</span>
           </button>
         </nav>
 
@@ -200,6 +203,46 @@
           </div>
         </section>
 
+        <section class="view" id="view-ai" data-view="ai" hidden>
+          <div class="page-head">
+            <div><p class="eyebrow">AI TUTOR / 对话</p><h1>用英语聊出自然表达</h1></div>
+            <span class="status-pill ai-status" id="aiStatus">正在检查 AI 服务</span>
+          </div>
+
+          <div class="ai-layout">
+            <aside class="card ai-scenario-panel">
+              <div><p class="card-kicker">SCENARIO</p><h2>选择情景</h2></div>
+              <div class="ai-scenario-list" aria-label="对话情景">
+                <button class="active" type="button" data-ai-scenario="campus"><strong>校园生活</strong><span>日常、课程与社团</span></button>
+                <button type="button" data-ai-scenario="travel"><strong>旅行出行</strong><span>问路、交通与住宿</span></button>
+                <button type="button" data-ai-scenario="interview"><strong>面试表达</strong><span>自我介绍与经历</span></button>
+                <button type="button" data-ai-scenario="technology"><strong>科技话题</strong><span>练习四级常见讨论</span></button>
+              </div>
+              <div class="ai-scenario-note">
+                <span>当前目标</span>
+                <p id="aiScenarioGoal">围绕校园日常自然交流，并学会补充理由。</p>
+              </div>
+              <button class="button ghost small" type="button" id="aiReset">重新开始当前情景</button>
+              <p class="ai-privacy">聊天记录只保存在当前浏览器。发送消息时，当前对话内容会交给 AI 生成回复与纠错。</p>
+            </aside>
+
+            <article class="card ai-chat-card">
+              <div class="ai-chat-head">
+                <div><p class="card-kicker">PRACTICE</p><h2 id="aiScenarioTitle">校园生活</h2></div>
+                <span id="aiTurnCount">0 轮</span>
+              </div>
+              <div class="ai-messages" id="aiMessages" aria-live="polite"></div>
+              <p class="ai-error" id="aiError" role="status" hidden></p>
+              <form class="ai-composer" id="aiForm">
+                <label class="sr-only" for="aiInput">输入英语或中文</label>
+                <textarea id="aiInput" rows="2" maxlength="1000" placeholder="Try: I usually study vocabulary in the library because…" required></textarea>
+                <button class="button primary" type="submit" id="aiSend">发送</button>
+              </form>
+              <p class="ai-composer-hint">Enter 发送 · Shift + Enter 换行。可以先用中文问，AI 会帮你改成自然的英语。</p>
+            </article>
+          </div>
+        </section>
+
         <section class="view" id="view-progress" data-view="progress" hidden>
           <div class="page-head">
             <div><p class="eyebrow">PROGRESS / 进度</p><h1>离500+，今天又近了一步</h1></div>
@@ -266,8 +309,9 @@
       <nav class="bottom-nav" aria-label="移动端主导航">
         <button class="active" type="button" data-view-target="today"><span>01</span>今日</button>
         <button type="button" data-view-target="listening"><span>02</span>听力</button>
-        <button type="button" data-view-target="progress"><span>03</span>进度</button>
-        <button type="button" data-view-target="settings"><span>04</span>设置</button>
+        <button type="button" data-view-target="ai"><span>03</span>AI</button>
+        <button type="button" data-view-target="progress"><span>04</span>进度</button>
+        <button type="button" data-view-target="settings"><span>05</span>设置</button>
       </nav>
     </div>
 
@@ -282,6 +326,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=5" defer></script>
+    <script src="./app.js?v=6" defer></script>
   </body>
 </html>

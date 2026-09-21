@@ -11,26 +11,34 @@
 - 4,023 个去重后的四级词条、音标与中文释义，以及 100 个高频搭配；
 - 三篇可离线使用的 VOA Learning English 精听材料；
 - 本地音频导入、原文显隐、变速和 A–B 循环；
+- AI 情景对话、重点语法纠错和四级词汇提示；
 - 15 + 15 分钟专注计时、考试倒计时和 7 天统计；
 - JSON 学习记录备份与恢复；
 - Android Chrome 和 Windows Chrome/Edge 可安装使用。
 
-所有学习记录默认只保存在当前浏览器，不会上传。
+学习记录和 AI 对话历史默认只保存在当前浏览器。使用 AI 对话时，当前消息和最近的对话内容会发送给 OpenAI 生成回复；API 密钥只由本机服务读取，不会进入网页代码。
 
 ## 本地运行
 
-`dist` 是完整的静态站点目录。由于浏览器安全限制，请通过本地 HTTP 服务运行，而不要直接双击 HTML：
+项目带有一个不依赖第三方软件包的本机服务。它会同时打开 `dist` 静态站点并保护 AI 密钥：
 
 ```powershell
-cd dist
-python -m http.server 4173
+node server.mjs
 ```
 
-然后打开 `http://127.0.0.1:4173/`。
+然后打开 `http://127.0.0.1:4174/`。
+
+## 启用 AI 对话
+
+1. 把 `.env.example` 复制为 `.env.local`；
+2. 在 `.env.local` 的 `OPENAI_API_KEY=` 后填入自己的 OpenAI API Key；
+3. 重新运行 `node server.mjs`。
+
+`.env.local` 已加入 `.gitignore`，不会被 Git 提交。不要在聊天、截图或公开仓库中分享真实密钥。未配置密钥时，其余学习功能仍可正常使用。
 
 ## 发布到 GitHub Pages
 
-仓库已包含 GitHub Actions 工作流。把项目推送到 GitHub 的 `main` 分支后，在仓库 **Settings → Pages → Source** 中选择 **GitHub Actions**，工作流会发布 `dist` 目录。
+仓库已包含手动运行的 GitHub Pages 工作流。目前线上站点保持关闭；准备公开后，可在 GitHub Actions 中手动运行部署流程。AI 对话需要安全的服务端密钥，不能只靠静态 GitHub Pages 运行。
 
 ## 数据来源
 
