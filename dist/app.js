@@ -84,12 +84,12 @@ let aiPending = false;
 let aiServiceStatus = "checking";
 let voiceSession = {
   state: "idle",
-  peer: null,
-  events: null,
-  microphone: null,
-  closeTimer: null,
+  active: false,
+  recognition: null,
+  restartTimer: null,
+  utterance: null,
   statusMessage: "准备开始语音练习",
-  hintMessage: "点击开始后允许使用麦克风，直接用英语和 AI 交流。",
+  hintMessage: "点击开始，说一句英语；本地 AI 会回答并由系统朗读。",
   transcript: ""
 };
 let timer = {
@@ -928,7 +928,7 @@ function renderAI() {
   const status = $("#aiStatus");
   status.classList.toggle("ready", aiServiceStatus === "ready");
   status.classList.toggle("offline", aiServiceStatus === "offline");
-  status.textContent = aiServiceStatus === "ready" ? "AI 服务已就绪" : aiServiceStatus === "offline" ? "需要配置 AI 服务" : "正在检查 AI 服务";
+  status.textContent = aiServiceStatus === "ready" ? "本地 AI 已就绪" : aiServiceStatus === "offline" ? "需要启动本地 AI" : "正在检查本地 AI";
 
   $("#aiMessages").innerHTML = messages.map((message) => `
     <div class="ai-message ${message.role === "user" ? "user" : "assistant"}">
@@ -969,7 +969,7 @@ function resetAIConversation() {
 }
 
 function isVoiceActive() {
-  return !["idle", "error"].includes(voiceSession.state);
+  return voiceSession.active;
 }
 
 function renderVoiceUI() {
@@ -977,52 +977,46 @@ function renderVoiceUI() {
   if (!stage) return;
   const labels = {
     idle: [voiceSession.statusMessage, voiceSession.hintMessage],
-    connecting: ["正在连接语音老师…", "首次使用时，请允许浏览器访问麦克风。"],
-    live: ["已经连通，可以开始说了", "自然说完一句后停顿一下，AI 会自动回答。"],
-    listening: ["正在听你说…", "继续说，停顿后 AI 会开始回答。"],
-    thinking: ["正在理解你的表达…", "AI 会用适合四级水平的英语回答。"],
-    speaking: ["AI 正在回答…", "你可以随时接着说，像真实对话一样练习。"],
-    ending: ["正在结束本次练习…", "请稍候，麦克风已经停止。"],
+    connecting: ["正在启动本地语音练习…", "首次使用时，请允许浏览器访问麦克风。"],
+    listening: ["正在听你说…", "说完一句后停顿一下，本地 AI 会开始回答。"],
+    thinking: ["本地 AI 正在思考…", "首次回答可能需要等待模型载入。"],
+    speaking: ["AI 正在朗读回答…", "朗读结束后会自动继续听你说。"],
     error: [voiceSession.statusMessage, voiceSession.hintMessage]
   };
   const [status, hint] = labels[voiceSession.state] || labels.idle;
   stage.dataset.state = voiceSession.state;
   $("#aiVoiceStatus").textContent = status;
   $("#aiVoiceHint").textContent = hint;
-  $("#aiVoiceTranscript p").textContent = voiceSession.transcript || "通话开始后，这里会显示正在生成的英文回复。";
+  $("#aiVoiceTranscript p").textContent = voiceSession.transcript || "开始后，这里会显示识别到的话和 AI 的英文回复。";
   const toggle = $("#aiVoiceToggle");
   const active = isVoiceActive();
-  toggle.textContent = active ? "结束语音对话" : "开始语音对话";
+  toggle.textContent = active ? "结束语音练习" : "开始语音练习";
   toggle.classList.toggle("live", active);
-  toggle.disabled = ["connecting", "ending"].includes(voiceSession.state);
+  toggle.disabled = voiceSession.state === "connecting";
 }
 
 function closeVoiceResources() {
-  clearTimeout(voiceSession.closeTimer);
-  const microphone = voiceSession.microphone;
-  const events = voiceSession.events;
-  const peer = voiceSession.peer;
-  voiceSession.peer = null;
-  voiceSession.events = null;
-  voiceSession.microphone = null;
-  voiceSession.closeTimer = null;
-  microphone?.getTracks().forEach((track) => track.stop());
-  try { events?.close(); } catch {}
-  try { peer?.close(); } catch {}
-  const audio = $("#aiVoiceAudio");
-  if (audio) audio.srcObject = null;
+  clearTimeout(voiceSession.restartTimer);
+  voiceSession.restartTimer = null;
+  const recognition = voiceSession.recognition;
+  voiceSession.recognition = null;
+  try { recognition?.abort(); } catch {}
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  voiceSession.utterance = null;
 }
 
 function settleVoiceSession(message = "本次语音练习已结束") {
   closeVoiceResources();
+  voiceSession.active = false;
   voiceSession.state = "idle";
   voiceSession.statusMessage = message;
   voiceSession.hintMessage = "点击开始，可以继续当前情景。";
   renderVoiceUI();
 }
 
-function failVoiceSession(message, hint = "请检查麦克风权限、网络和 AI 配置后重试。") {
+function failVoiceSession(message, hint = "请检查麦克风权限，并确认本地 AI 已启动。") {
   closeVoiceResources();
+  voiceSession.active = false;
   voiceSession.state = "error";
   voiceSession.statusMessage = message;
   voiceSession.hintMessage = hint;
@@ -1037,151 +1031,157 @@ function setAIMode(mode) {
   renderAI();
 }
 
-function waitForIceGathering(connection) {
-  if (connection.iceGatheringState === "complete") return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
-      connection.removeEventListener("icegatheringstatechange", onState);
-      reject(new Error("语音连接超时，请检查网络后重试。"));
-    }, 10000);
-    function onState() {
-      if (connection.iceGatheringState !== "complete") return;
-      clearTimeout(timeout);
-      connection.removeEventListener("icegatheringstatechange", onState);
-      resolve();
+function speechRecognitionConstructor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function scheduleVoiceListening(delay = 450) {
+  clearTimeout(voiceSession.restartTimer);
+  if (!voiceSession.active) return;
+  voiceSession.restartTimer = window.setTimeout(beginVoiceListening, delay);
+}
+
+function beginVoiceListening() {
+  if (!voiceSession.active || voiceSession.recognition) return;
+  const Recognition = speechRecognitionConstructor();
+  if (!Recognition) return failVoiceSession("当前浏览器不支持语音识别", "请使用最新版 Chrome 或 Edge，也可以继续使用文字对话。" );
+
+  const recognition = new Recognition();
+  voiceSession.recognition = recognition;
+  recognition.lang = state.settings.accent || "en-US";
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  let finalText = "";
+
+  recognition.addEventListener("start", () => {
+    if (!voiceSession.active) return;
+    voiceSession.state = "listening";
+    renderVoiceUI();
+  });
+  recognition.addEventListener("result", (event) => {
+    let interim = "";
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      const text = event.results[index][0]?.transcript || "";
+      if (event.results[index].isFinal) finalText += text;
+      else interim += text;
     }
-    connection.addEventListener("icegatheringstatechange", onState);
-    onState();
+    voiceSession.transcript = `你：${(finalText || interim).trim()}`;
+    renderVoiceUI();
+  });
+  recognition.addEventListener("error", (event) => {
+    if (["aborted", "no-speech"].includes(event.error)) return;
+    if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+      failVoiceSession("没有获得麦克风权限", "请在浏览器地址栏旁允许麦克风，然后重新开始。" );
+    } else {
+      failVoiceSession("语音识别暂时不可用", `浏览器返回：${event.error || "unknown"}`);
+    }
+  });
+  recognition.addEventListener("end", () => {
+    if (voiceSession.recognition !== recognition) return;
+    voiceSession.recognition = null;
+    const content = finalText.trim();
+    if (content && voiceSession.active) submitVoiceTurn(content);
+    else if (voiceSession.active && voiceSession.state === "listening") scheduleVoiceListening();
+  });
+
+  try {
+    recognition.start();
+  } catch (error) {
+    voiceSession.recognition = null;
+    failVoiceSession("无法启动语音识别", error.message || "请重新开始语音练习。" );
+  }
+}
+
+function speakVoiceReply(text) {
+  return new Promise((resolve) => {
+    if (!("speechSynthesis" in window) || !text || !voiceSession.active) return resolve();
+    speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    voiceSession.utterance = utterance;
+    utterance.lang = state.settings.accent || "en-US";
+    utterance.rate = 0.88;
+    const selected = speechSynthesis.getVoices().find((voice) => voice.voiceURI === state.settings.voiceURI);
+    if (selected) utterance.voice = selected;
+    utterance.addEventListener("start", () => {
+      if (!voiceSession.active) return;
+      voiceSession.state = "speaking";
+      renderVoiceUI();
+    });
+    const finish = () => {
+      if (voiceSession.utterance === utterance) voiceSession.utterance = null;
+      resolve();
+    };
+    utterance.addEventListener("end", finish, { once: true });
+    utterance.addEventListener("error", finish, { once: true });
+    speechSynthesis.speak(utterance);
   });
 }
 
-function handleVoiceEvent(rawEvent) {
-  let event = rawEvent;
-  if (event?.type === "response.event" && event.event) event = event.event;
-  const type = event?.type || "";
-  if (["session.started", "session.created", "session.updated"].includes(type)) {
-    voiceSession.state = "live";
-  } else if (type === "input_audio_buffer.speech_started") {
-    voiceSession.state = "listening";
-    voiceSession.transcript = "";
-  } else if (type === "input_audio_buffer.speech_stopped") {
-    voiceSession.state = "thinking";
-  } else if (["response.audio_transcript.delta", "response.output_audio_transcript.delta"].includes(type)) {
-    voiceSession.state = "speaking";
-    voiceSession.transcript += String(event.delta || "");
-  } else if (["response.audio_transcript.done", "response.output_audio_transcript.done"].includes(type)) {
-    voiceSession.state = "speaking";
-    voiceSession.transcript = String(event.transcript || voiceSession.transcript);
-  } else if (type === "conversation.item.input_audio_transcription.completed" && event.transcript) {
-    voiceSession.transcript = `你：${event.transcript}`;
-  } else if (type === "response.done") {
-    voiceSession.state = "live";
-  } else if (type === "session.closed") {
-    settleVoiceSession();
-    return;
-  } else if (type === "error") {
-    failVoiceSession("语音服务返回了错误", "请检查 AI 配置后重新连接。" );
-    return;
+async function submitVoiceTurn(content) {
+  if (!voiceSession.active || aiPending) return;
+  const messages = currentAISession();
+  const history = messages.slice(-12).map(({ role, content: text }) => ({ role, content: text }));
+  messages.push({ role: "user", content, createdAt: new Date().toISOString() });
+  if (messages.length > 40) messages.splice(1, messages.length - 40);
+  saveState();
+  aiPending = true;
+  voiceSession.state = "thinking";
+  voiceSession.transcript = `你：${content}\nAI：正在生成回答…`;
+  renderAI();
+
+  try {
+    const response = await fetch("./api/ai-chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scenario: state.ai.scenario, history, message: content })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "本地 AI 暂时无法回复。" );
+    const reply = String(result.reply || "Could you tell me a little more?");
+    messages.push({
+      role: "assistant",
+      content: reply,
+      feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 2) : [],
+      vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.slice(0, 2) : [],
+      createdAt: new Date().toISOString()
+    });
+    voiceSession.transcript = `你：${content}\nAI：${reply}`;
+    aiServiceStatus = "ready";
+    saveState();
+    renderAI();
+    await speakVoiceReply(reply);
+    if (voiceSession.active) scheduleVoiceListening(300);
+  } catch (error) {
+    failVoiceSession("本地 AI 没有成功回答", error.message || "请确认 Ollama 正在运行。" );
+  } finally {
+    aiPending = false;
+    renderAI();
   }
-  renderVoiceUI();
 }
 
-async function startVoiceConversation() {
+function startVoiceConversation() {
   if (aiServiceStatus !== "ready") {
-    return failVoiceSession("AI 服务尚未配置", "请先在 .env.local 中配置 OPENAI_API_KEY，再重新启动应用。" );
+    return failVoiceSession("本地 AI 尚未就绪", "请先启动 Ollama 并下载应用所需模型。" );
   }
-  if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) {
-    return failVoiceSession("当前浏览器不支持实时语音", "请使用最新版 Chrome 或 Edge，并通过固定本机地址打开应用。" );
+  if (!speechRecognitionConstructor()) {
+    return failVoiceSession("当前浏览器不支持语音识别", "请使用最新版 Chrome 或 Edge，也可以继续使用文字对话。" );
   }
-
   closeVoiceResources();
+  voiceSession.active = true;
   voiceSession.state = "connecting";
   voiceSession.transcript = "";
   renderVoiceUI();
-
-  try {
-    const connection = new RTCPeerConnection();
-    voiceSession.peer = connection;
-    const audio = $("#aiVoiceAudio");
-    connection.addEventListener("track", (event) => {
-      audio.srcObject = event.streams[0] || new MediaStream([event.track]);
-      audio.play().catch(() => {
-        voiceSession.hintMessage = "如果听不到声音，请检查浏览器是否允许自动播放。";
-        renderVoiceUI();
-      });
-    });
-    connection.addEventListener("connectionstatechange", () => {
-      if (["failed", "disconnected"].includes(connection.connectionState) && voiceSession.peer === connection && voiceSession.state !== "ending") {
-        failVoiceSession("语音连接已中断", "请检查网络后重新开始。" );
-      }
-    });
-
-    const microphone = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-    });
-    voiceSession.microphone = microphone;
-    microphone.getAudioTracks().forEach((track) => connection.addTrack(track, microphone));
-
-    const events = connection.createDataChannel("oai-events");
-    voiceSession.events = events;
-    events.addEventListener("open", () => {
-      voiceSession.state = "live";
-      renderVoiceUI();
-    });
-    events.addEventListener("message", ({ data }) => {
-      try { handleVoiceEvent(JSON.parse(data)); } catch {}
-    });
-    events.addEventListener("close", () => {
-      if (voiceSession.events !== events) return;
-      if (voiceSession.state === "ending") settleVoiceSession();
-      else if (isVoiceActive()) failVoiceSession("语音连接意外断开", "点击开始可以重新连接。" );
-    });
-
-    const offer = await connection.createOffer();
-    await connection.setLocalDescription(offer);
-    await waitForIceGathering(connection);
-    const sdp = connection.localDescription?.sdp;
-    if (!sdp) throw new Error("浏览器没有生成有效的语音连接。" );
-    const response = await fetch(`/api/voice-session?scenario=${encodeURIComponent(state.ai.scenario)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/sdp" },
-      body: sdp
-    });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || "无法创建语音对话，请稍后重试。" );
-    }
-    const answer = await response.text();
-    await connection.setRemoteDescription({ type: "answer", sdp: answer });
-  } catch (error) {
-    const message = error?.name === "NotAllowedError" ? "没有获得麦克风权限" : (error.message || "语音连接失败");
-    const hint = error?.name === "NotAllowedError" ? "请在浏览器地址栏旁允许麦克风，然后重新开始。" : "请检查网络和 AI 配置后重试。";
-    failVoiceSession(message, hint);
-  }
+  beginVoiceListening();
 }
 
 function finishVoiceConversation() {
   if (!isVoiceActive()) return;
-  voiceSession.microphone?.getTracks().forEach((track) => track.stop());
-  voiceSession.state = "ending";
-  renderVoiceUI();
-  if (voiceSession.events?.readyState === "open") {
-    try {
-      voiceSession.events.send(JSON.stringify({ type: "session.close" }));
-      voiceSession.closeTimer = window.setTimeout(() => settleVoiceSession(), 10000);
-    } catch {
-      settleVoiceSession();
-    }
-  } else {
-    settleVoiceSession();
-  }
+  settleVoiceSession();
 }
 
 function stopVoiceImmediately(shouldRender = true) {
-  if (voiceSession.events?.readyState === "open") {
-    try { voiceSession.events.send(JSON.stringify({ type: "session.close" })); } catch {}
-  }
   closeVoiceResources();
+  voiceSession.active = false;
   voiceSession.state = "idle";
   voiceSession.statusMessage = "本次语音练习已结束";
   voiceSession.hintMessage = "点击开始，可以继续当前情景。";
@@ -1558,7 +1558,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=7", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=8", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

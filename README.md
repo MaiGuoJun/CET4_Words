@@ -11,16 +11,16 @@
 - 4,023 个去重后的四级词条、音标与中文释义，以及 100 个高频搭配；
 - 三篇可离线使用的 VOA Learning English 精听材料；
 - 本地音频导入、原文显隐、变速和 A–B 循环；
-- AI 文字情景对话、重点语法纠错、四级词汇提示和 WebRTC 实时语音练习；
+- Ollama 本地 AI 文字情景对话、重点语法纠错、四级词汇提示和免费语音练习；
 - 15 + 15 分钟专注计时、考试倒计时和 7 天统计；
 - JSON 学习记录备份与恢复；
 - Android Chrome 和 Windows Chrome/Edge 可安装使用。
 
-学习记录和 AI 对话历史默认只保存在当前浏览器。使用 AI 对话时，当前消息和最近的对话内容会发送给 OpenAI 生成回复；API 密钥只由本机服务读取，不会进入网页代码。
+学习记录和 AI 对话历史默认只保存在当前浏览器。AI 回复由本机 Ollama 模型生成，不需要 OpenAI API Key，也不会产生 API 调用费用。
 
 ## 本地运行
 
-项目带有一个不依赖第三方软件包的本机服务。它会同时打开 `dist` 静态站点并保护 AI 密钥：
+项目带有一个不依赖第三方软件包的本机服务。它会打开 `dist` 静态站点，并把 AI 请求转发给本机 Ollama：
 
 ```powershell
 node server.mjs
@@ -28,19 +28,19 @@ node server.mjs
 
 然后打开 `http://127.0.0.1:4174/`。
 
-## 启用 AI 对话
+## 启用本地 AI 对话
 
-1. 把 `.env.example` 复制为 `.env.local`；
-2. 在 `.env.local` 的 `OPENAI_API_KEY=` 后填入自己的 OpenAI API Key；
-3. 重新运行 `node server.mjs`。
+1. 安装 [Ollama for Windows](https://ollama.com/download/windows)；
+2. 在 PowerShell 中运行 `ollama pull qwen3.5:2b` 下载模型；
+3. 运行 `node server.mjs`，然后打开 `http://127.0.0.1:4174/`。
 
-`.env.local` 已加入 `.gitignore`，不会被 Git 提交。不要在聊天、截图或公开仓库中分享真实密钥。未配置密钥时，其余学习功能仍可正常使用。
+默认模型为 `qwen3.5:2b`，适合日常对话的速度与中英文纠错。如需更高质量，可在 `.env.local` 中添加 `OLLAMA_MODEL=qwen3.5:9b`。`.env.local` 已加入 `.gitignore`，不会被 Git 提交。Ollama 未启动时，其余学习功能仍可正常使用。
 
-实时语音使用同一个 API Key。打开 **AI 对话 → 实时语音**，点击“开始语音对话”并允许麦克风即可；语音只在当前通话期间传输，应用不会保存录音。语音功能需要最新版 Chrome 或 Edge，并通过 `localhost`、`127.0.0.1` 或 HTTPS 打开。
+打开 **AI 对话 → 本地语音**，点击“开始语音练习”并允许麦克风即可。AI 回复由本机模型生成并由系统声音朗读；语音识别使用 Chrome/Edge 提供的浏览器能力，部分浏览器可能联网完成识别，但应用不会保存录音。
 
 ## 发布到 GitHub Pages
 
-仓库已包含手动运行的 GitHub Pages 工作流。目前线上站点保持关闭；准备公开后，可在 GitHub Actions 中手动运行部署流程。AI 对话需要安全的服务端密钥，不能只靠静态 GitHub Pages 运行。
+仓库已包含手动运行的 GitHub Pages 工作流。目前线上站点保持关闭；准备公开后，可在 GitHub Actions 中手动运行部署流程。本地 AI 需要访问使用者电脑上的 Ollama，因此静态 GitHub Pages 不能直接提供该功能。
 
 ## 数据来源
 

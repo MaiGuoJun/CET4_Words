@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=7" />
+    <link rel="stylesheet" href="./styles.css?v=8" />
   </head>
   <body>
     <div class="app-shell">
@@ -206,7 +206,7 @@
         <section class="view" id="view-ai" data-view="ai" hidden>
           <div class="page-head">
             <div><p class="eyebrow">AI TUTOR / 对话</p><h1>用英语聊出自然表达</h1></div>
-            <span class="status-pill ai-status" id="aiStatus">正在检查 AI 服务</span>
+            <span class="status-pill ai-status" id="aiStatus">正在检查本地 AI</span>
           </div>
 
           <div class="ai-layout">
@@ -223,7 +223,7 @@
                 <p id="aiScenarioGoal">围绕校园日常自然交流，并学会补充理由。</p>
               </div>
               <button class="button ghost small" type="button" id="aiReset">重新开始当前情景</button>
-              <p class="ai-privacy">聊天记录只保存在当前浏览器。发送消息时，当前对话内容会交给 AI 生成回复与纠错。</p>
+              <p class="ai-privacy">聊天记录只保存在当前浏览器。对话内容只会发送给这台电脑上的 Ollama 本地模型。</p>
             </aside>
 
             <article class="card ai-chat-card">
@@ -233,7 +233,7 @@
               </div>
               <div class="ai-mode-switch" role="tablist" aria-label="对话方式">
                 <button class="active" type="button" role="tab" aria-selected="true" data-ai-mode="text">文字对话</button>
-                <button type="button" role="tab" aria-selected="false" data-ai-mode="voice">实时语音</button>
+                <button type="button" role="tab" aria-selected="false" data-ai-mode="voice">本地语音</button>
               </div>
 
               <div class="ai-text-panel" id="aiTextPanel">
@@ -252,15 +252,14 @@
                   <div class="ai-voice-orbit" aria-hidden="true"><i></i><i></i><span>MIC</span></div>
                   <p class="card-kicker">LIVE SPEAKING</p>
                   <h3 id="aiVoiceStatus" aria-live="polite">准备开始语音练习</h3>
-                  <p id="aiVoiceHint">点击开始后允许使用麦克风，直接用英语和 AI 交流。</p>
+                  <p id="aiVoiceHint">点击开始，说一句英语；本地 AI 会回答并由系统朗读。</p>
                 </div>
                 <div class="ai-voice-transcript" id="aiVoiceTranscript" aria-live="polite">
                   <span>实时文字提示</span>
-                  <p>通话开始后，这里会显示正在生成的英文回复。</p>
+                  <p>开始后，这里会显示识别到的话和 AI 的英文回复。</p>
                 </div>
-                <button class="button primary ai-voice-toggle" type="button" id="aiVoiceToggle">开始语音对话</button>
-                <p class="ai-voice-privacy">语音会在通话期间发送给 OpenAI；结束后，本应用不会保存录音。请在安静环境中练习。</p>
-                <audio id="aiVoiceAudio" autoplay hidden></audio>
+                <button class="button primary ai-voice-toggle" type="button" id="aiVoiceToggle">开始语音练习</button>
+                <p class="ai-voice-privacy">AI 回答由本机 Ollama 生成，不收 API 费用。语音识别由浏览器提供，部分浏览器可能联网完成识别；本应用不会保存录音。</p>
               </div>
             </article>
           </div>
@@ -349,6 +348,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=7" defer></script>
+    <script src="./app.js?v=8" defer></script>
   </body>
 </html>

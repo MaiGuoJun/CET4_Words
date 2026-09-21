@@ -27,12 +27,9 @@ async function loadLocalEnvironment() {
 await loadLocalEnvironment();
 
 const PORT = Number(process.env.PORT) || 4174;
-const MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
-const VOICE_MODEL = process.env.OPENAI_VOICE_MODEL || "gpt-realtime-2.1";
-const VOICE = process.env.OPENAI_VOICE || "marin";
-const API_KEY = process.env.OPENAI_API_KEY || "";
+const MODEL = process.env.OLLAMA_MODEL || "qwen3.5:2b";
+const OLLAMA_URL = (process.env.OLLAMA_URL || "http://127.0.0.1:11434").replace(/\/$/, "");
 const MAX_BODY_BYTES = 48 * 1024;
-const MAX_SDP_BYTES = 128 * 1024;
 const rateLimits = new Map();
 
 const SCENARIOS = {
@@ -83,15 +80,6 @@ async function readJsonBody(request) {
   return JSON.parse((await readBody(request)) || "{}");
 }
 
-function outputText(response) {
-  if (typeof response.output_text === "string") return response.output_text;
-  return (response.output || [])
-    .flatMap((item) => item.content || [])
-    .filter((item) => item.type === "output_text" && typeof item.text === "string")
-    .map((item) => item.text)
-    .join("\n");
-}
-
 function parseTutorReply(text) {
   const cleaned = String(text || "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   const start = cleaned.indexOf("{");
@@ -100,16 +88,16 @@ function parseTutorReply(text) {
     const result = JSON.parse(start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned);
     return {
       reply: String(result.reply || "").slice(0, 1200),
-      feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 2).map((item) => ({
+      feedback: Array.isArray(result.feedback) ? result.feedback.map((item) => ({
         original: String(item?.original || "").slice(0, 300),
         correction: String(item?.correction || "").slice(0, 300),
         reason: String(item?.reason || "").slice(0, 300)
-      })) : [],
-      vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.slice(0, 2).map((item) => ({
+      })).filter((item) => item.correction).slice(0, 2) : [],
+      vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.map((item) => ({
         word: String(item?.word || "").slice(0, 80),
         meaning: String(item?.meaning || "").slice(0, 160),
         example: String(item?.example || "").slice(0, 300)
-      })) : []
+      })).filter((item) => item.word).slice(0, 2) : []
     };
   } catch {
     return { reply: cleaned.slice(0, 1200), feedback: [], vocabulary: [] };
@@ -117,7 +105,6 @@ function parseTutorReply(text) {
 }
 
 async function handleAIChat(request, response) {
-  if (!API_KEY) return json(response, 503, { error: "AI 服务尚未配置。请在项目的 .env.local 中设置 OPENAI_API_KEY，然后重新启动应用。" });
   if (!allowRequest(request)) return json(response, 429, { error: "请求有点频繁，请稍等几分钟再继续练习。" });
 
   let body;
@@ -138,95 +125,53 @@ async function handleAIChat(request, response) {
 
   const instructions = `You are the private English tutor inside 蘑菇酱四级 for one Chinese learner preparing for CET-4 and aiming for 500+. The learner is around B1 and wants practical conversation plus gentle correction. The current scenario is ${SCENARIOS[scenario]}.
 
-Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the scene. Correct only the one or two mistakes that matter most. End the English reply with exactly one useful follow-up question. Keep the reply under 90 English words.
+Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the scene. Correct only the one or two mistakes that matter most. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
 
 Return only a valid JSON object with this shape: {"reply":"English reply","feedback":[{"original":"learner wording","correction":"natural correction","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. Use empty arrays when there is nothing useful to add. Include at most two feedback items and two vocabulary items.`;
 
   try {
-    const upstream = await fetch("https://api.openai.com/v1/responses", {
+    const upstream = await fetch(`${OLLAMA_URL}/api/chat`, {
       method: "POST",
-      headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: MODEL,
-        store: false,
-        max_output_tokens: 700,
-        instructions,
-        input: [...history, { role: "user", content: message }]
-      })
+        messages: [{ role: "system", content: instructions }, ...history, { role: "user", content: message }],
+        stream: false,
+        think: false,
+        format: "json",
+        keep_alive: "10m",
+        options: { temperature: 0.55, num_predict: 360 }
+      }),
+      signal: AbortSignal.timeout(120000)
     });
     if (!upstream.ok) {
-      console.error(`OpenAI request failed with status ${upstream.status}`);
-      const safeMessage = upstream.status === 401
-        ? "AI 密钥无效，请检查 .env.local 后重启应用。"
-        : upstream.status === 429
-          ? "AI 服务额度不足或请求过快，请稍后再试。"
-          : "AI 服务暂时不可用，请稍后再试。";
-      return json(response, upstream.status === 401 ? 401 : 502, { error: safeMessage });
+      console.error(`Ollama request failed with status ${upstream.status}`);
+      const safeMessage = upstream.status === 404
+        ? `本地模型 ${MODEL} 尚未下载，请先运行 ollama pull ${MODEL}。`
+        : "本地 AI 暂时不可用，请确认 Ollama 正在运行。";
+      return json(response, 502, { error: safeMessage });
     }
     const data = await upstream.json();
-    const result = parseTutorReply(outputText(data));
+    const result = parseTutorReply(data?.message?.content);
     if (!result.reply) return json(response, 502, { error: "AI 没有生成有效回复，请再试一次。" });
     return json(response, 200, result);
   } catch (error) {
-    console.error("OpenAI connection failed:", error.message);
-    return json(response, 502, { error: "无法连接 AI 服务，请检查网络后再试。" });
+    console.error("Ollama connection failed:", error.message);
+    const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+    return json(response, 502, { error: timedOut ? "本地 AI 回复超时，请稍后再试。" : "无法连接本地 AI，请确认 Ollama 已安装并正在运行。" });
   }
 }
 
-function hasAllowedOrigin(request) {
-  const origin = request.headers.origin;
-  if (!origin) return true;
-  return origin === `http://127.0.0.1:${PORT}` || origin === `http://localhost:${PORT}`;
-}
-
-async function handleVoiceSession(request, response, requestUrl) {
-  if (!hasAllowedOrigin(request)) return json(response, 403, { error: "不允许从当前网页创建语音会话。" });
-  if (!API_KEY) return json(response, 503, { error: "AI 服务尚未配置。请先设置 OPENAI_API_KEY 并重新启动应用。" });
-  if (!allowRequest(request)) return json(response, 429, { error: "语音连接有点频繁，请稍后再试。" });
-  if (!String(request.headers["content-type"] || "").startsWith("application/sdp")) {
-    return json(response, 415, { error: "语音连接格式不正确。" });
-  }
-
-  let sdp;
+async function getLocalAIStatus() {
   try {
-    sdp = (await readBody(request, MAX_SDP_BYTES)).trim();
-  } catch (error) {
-    return json(response, error.message === "PAYLOAD_TOO_LARGE" ? 413 : 400, { error: "语音连接内容过长或无效。" });
-  }
-  if (!sdp.startsWith("v=0")) return json(response, 400, { error: "浏览器没有提供有效的语音连接。" });
-
-  const scenarioKey = SCENARIOS[requestUrl.searchParams.get("scenario")] ? requestUrl.searchParams.get("scenario") : "campus";
-  const instructions = `You are the real-time English speaking tutor inside 蘑菇酱四级. The learner is Chinese, preparing for CET-4, aiming for 500+, and around B1 level. Practice ${SCENARIOS[scenarioKey]}. Speak clearly and slightly slower than normal conversation. Keep each turn to two to four short sentences, then ask exactly one question. Correct only the most important error naturally and briefly. Use mostly English. If the learner gets stuck or speaks Chinese, give a brief Chinese hint followed by a natural English sentence they can repeat. Do not use markdown or long lists.`;
-
-  try {
-    const form = new FormData();
-    form.set("sdp", sdp);
-    form.set("session", JSON.stringify({
-      type: "realtime",
-      model: VOICE_MODEL,
-      instructions,
-      audio: { output: { voice: VOICE } }
-    }));
-    const upstream = await fetch("https://api.openai.com/v1/realtime/calls", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${API_KEY}` },
-      body: form
-    });
-    const answer = await upstream.text();
-    if (!upstream.ok) {
-      console.error(`OpenAI voice session failed with status ${upstream.status}`);
-      const safeMessage = upstream.status === 401
-        ? "AI 密钥无效，请检查 .env.local 后重启应用。"
-        : upstream.status === 429
-          ? "语音服务额度不足或请求过快，请稍后再试。"
-          : "暂时无法创建语音对话，请稍后再试。";
-      return json(response, upstream.status === 401 ? 401 : 502, { error: safeMessage });
-    }
-    response.writeHead(201, { "Content-Type": "application/sdp", "Cache-Control": "no-store" });
-    response.end(answer);
-  } catch (error) {
-    console.error("OpenAI voice connection failed:", error.message);
-    return json(response, 502, { error: "无法连接语音服务，请检查网络后再试。" });
+    const upstream = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(2500) });
+    if (!upstream.ok) throw new Error(`status ${upstream.status}`);
+    const data = await upstream.json();
+    const modelNames = Array.isArray(data.models) ? data.models.map((item) => String(item?.name || item?.model || "")) : [];
+    const installed = modelNames.some((name) => name === MODEL || name === `${MODEL}:latest`);
+    return { configured: installed, provider: "ollama", model: MODEL, running: true, modelInstalled: installed, voiceMode: "browser" };
+  } catch {
+    return { configured: false, provider: "ollama", model: MODEL, running: false, modelInstalled: false, voiceMode: "browser" };
   }
 }
 
@@ -263,15 +208,14 @@ async function serveStatic(request, response, requestUrl) {
 const server = http.createServer(async (request, response) => {
   const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
   if (request.method === "GET" && requestUrl.pathname === "/api/ai-status") {
-    return json(response, 200, { configured: Boolean(API_KEY), model: MODEL, voiceModel: VOICE_MODEL });
+    return json(response, 200, await getLocalAIStatus());
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/ai-chat") return handleAIChat(request, response);
-  if (request.method === "POST" && requestUrl.pathname === "/api/voice-session") return handleVoiceSession(request, response, requestUrl);
   if (!["GET", "HEAD"].includes(request.method || "")) return json(response, 405, { error: "Method not allowed" });
   return serveStatic(request, response, requestUrl);
 });
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`蘑菇酱四级已启动：http://127.0.0.1:${PORT}/`);
-  console.log(API_KEY ? `AI 对话已启用（${MODEL}）` : "AI 对话未配置：请创建 .env.local 并设置 OPENAI_API_KEY");
+  console.log(`本地 AI：Ollama / ${MODEL}`);
 });
