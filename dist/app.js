@@ -41,6 +41,11 @@ const AI_SCENARIOS = {
     title: "科技话题",
     goal: "围绕常见四级科技话题表达观点、理由与例子。",
     opening: "Technology has changed the way students learn. Which change has helped you the most, and why?"
+  },
+  free: {
+    title: "自由畅聊",
+    goal: "不设固定情景，跟随你感兴趣的话题自由交流。",
+    opening: "This is an open conversation. What would you like to talk about today?"
   }
 };
 
@@ -1668,7 +1673,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=9", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=10", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

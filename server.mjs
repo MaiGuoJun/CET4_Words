@@ -36,7 +36,8 @@ const SCENARIOS = {
   campus: "campus life, classes, routines, and student clubs",
   travel: "travel, transportation, directions, and accommodation",
   interview: "a friendly student-club interview and self-introduction",
-  technology: "technology and education topics commonly discussed at CET-4 level"
+  technology: "technology and education topics commonly discussed at CET-4 level",
+  free: "an open-ended conversation with no fixed topic; follow whatever subject the learner chooses"
 };
 
 const CONTENT_TYPES = {
@@ -125,7 +126,7 @@ async function handleAIChat(request, response) {
 
   const instructions = `You are the private English tutor inside 蘑菇酱四级 for one Chinese learner preparing for CET-4 and aiming for 500+. The learner is around B1 and wants practical conversation plus gentle correction. The current scenario is ${SCENARIOS[scenario]}.
 
-Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the scene. Correct only the one or two mistakes that matter most. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
+Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. Correct only the one or two mistakes that matter most. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
 
 Return only a valid JSON object with this shape: {"reply":"English reply","feedback":[{"original":"learner wording","correction":"natural correction","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. Use empty arrays when there is nothing useful to add. Include at most two feedback items and two vocabulary items.`;
 
