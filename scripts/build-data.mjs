@@ -197,11 +197,12 @@ const output = cet4.filter((row) => {
   const normalized = row["单词"].toLocaleLowerCase("en-US");
   const extra = supplements.get(normalized) || {};
   const phrase = phrases.get(normalized) || {};
+  const coreTranslation = String(row["释义"] || "").trim();
   return {
     word: row["单词"],
     phonetic: extra.phonetic || "",
-    translation: normalizeTranslation(extra.translation) || row["释义"] || "",
-    brief: row["释义"] || "",
+    translation: coreTranslation || normalizeTranslation(extra.translation),
+    brief: coreTranslation,
     rank: row["序号"],
     frequency: row["词频"],
     category: row["分类"] || "",
