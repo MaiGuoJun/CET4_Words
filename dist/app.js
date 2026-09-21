@@ -285,7 +285,15 @@ function toast(title, detail = "") {
   item.className = "toast";
   item.innerHTML = `<strong>${escapeHtml(title)}</strong>${detail ? `<span>${escapeHtml(detail)}</span>` : ""}`;
   $("#toastRegion").append(item);
-  window.setTimeout(() => item.remove(), 3800);
+  window.setTimeout(() => item.classList.add("out"), 3500);
+  window.setTimeout(() => item.remove(), 3750);
+}
+
+function replayMotion(element, className) {
+  if (!element || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  element.classList.remove(className);
+  void element.offsetWidth;
+  element.classList.add(className);
 }
 
 function applyTheme() {
@@ -475,6 +483,7 @@ function renderCurrentWord() {
   $("#phraseBox").hidden = !hasPhrase;
   $("#wordPhrase").textContent = currentWord.phrase || "";
   $("#phraseMeaning").textContent = currentWord.phraseMeaning || "";
+  replayMotion($("#wordWorkspace"), "word-enter");
 }
 
 function renderEmptyStudy() {
@@ -493,6 +502,8 @@ function revealCurrentWord() {
   $("#wordReveal").hidden = false;
   $("#ratingActions").hidden = false;
   $("#revealWord").hidden = true;
+  replayMotion($("#wordReveal"), "reveal-enter");
+  replayMotion($("#ratingActions"), "reveal-enter");
 }
 
 function rateCurrentWord(rating) {
@@ -587,6 +598,7 @@ function renderQuizQuestion() {
     options = shuffle([currentWord, ...otherWords]).map((word) => ({ value: word.word, label: word.word }));
   }
   $("#quizOptions").innerHTML = options.map((option) => `<button class="quiz-option" type="button" data-answer="${escapeHtml(option.value)}">${escapeHtml(option.label)}</button>`).join("");
+  replayMotion($("#wordWorkspace"), "word-enter");
 }
 
 function answerQuiz(answer, button) {
@@ -650,6 +662,7 @@ function setDailyTarget(value, manual = true) {
 }
 
 function renderTimer() {
+  $(".timer-card").classList.toggle("running", timer.running);
   $("#timerPhase").textContent = timer.phase === "word" ? "单词阶段" : "听力阶段";
   $("#timerDisplay").textContent = formatClock(timer.remaining);
   $("#timerStatus").textContent = timer.running ? "专注中" : timer.remaining === 0 ? "已完成" : "未开始";
@@ -953,13 +966,13 @@ function renderAI() {
   status.classList.toggle("offline", aiServiceStatus === "offline");
   status.textContent = aiServiceStatus === "ready" ? "本地 AI 已就绪" : aiServiceStatus === "offline" ? "需要启动本地 AI" : "正在检查本地 AI";
 
-  $("#aiMessages").innerHTML = messages.map((message) => `
-    <div class="ai-message ${message.role === "user" ? "user" : "assistant"}">
+  $("#aiMessages").innerHTML = messages.map((message, index) => `
+    <div class="ai-message ${message.role === "user" ? "user" : "assistant"} ${index === messages.length - 1 ? "latest" : ""}">
       <div class="ai-message-label">${message.role === "user" ? "YOU" : "AI TUTOR"}</div>
       <div class="ai-bubble">${escapeHtml(message.content || "")}</div>
       ${message.role === "assistant" ? renderAIFeedback(message.feedback) + renderAIVocabulary(message.vocabulary) : ""}
     </div>`).join("") + (aiPending ? `
-    <div class="ai-message assistant" aria-label="AI 正在回复">
+    <div class="ai-message assistant latest" aria-label="AI 正在回复">
       <div class="ai-message-label">AI TUTOR</div>
       <div class="ai-bubble ai-typing"><i></i><i></i><i></i></div>
     </div>` : "");
@@ -1685,7 +1698,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=12", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=13", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
