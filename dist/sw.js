@@ -1,4 +1,4 @@
-const CACHE = "mogu-cet4-v33";
+const CACHE = "mogu-cet4-v34";
 const CORE = [
   "./",
   "./index.html",

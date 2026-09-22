@@ -58,6 +58,16 @@ const AI_SCENARIOS = {
 };
 
 const defaultAIState = () => ({ scenario: "campus", mode: "text", sessions: {} });
+const defaultVocabAssessment = () => ({
+  status: "idle",
+  version: 1,
+  questions: [],
+  answers: [],
+  currentIndex: 0,
+  startedAt: null,
+  completedAt: null,
+  result: null
+});
 
 const defaultState = () => ({
   version: 1,
@@ -76,6 +86,7 @@ const defaultState = () => ({
   daily: {},
   completedListening: [],
   ai: defaultAIState(),
+  vocabAssessment: defaultVocabAssessment(),
   lastBackupAt: null,
   createdAt: new Date().toISOString()
 });
@@ -88,6 +99,7 @@ let studyMode = "screen";
 let currentWordIndex = 0;
 let currentWord = null;
 let studyQueue = [];
+let screeningSessionOffset = 0;
 let stableStudyHeight = 0;
 let quizQueue = [];
 let currentQuiz = null;
@@ -172,6 +184,12 @@ function normalizeState(parsed) {
       ...base.ai,
       ...(parsed.ai || {}),
       sessions: { ...(parsed.ai?.sessions || {}) }
+    },
+    vocabAssessment: {
+      ...base.vocabAssessment,
+      ...(parsed.vocabAssessment || {}),
+      questions: Array.isArray(parsed.vocabAssessment?.questions) ? parsed.vocabAssessment.questions : [],
+      answers: Array.isArray(parsed.vocabAssessment?.answers) ? parsed.vocabAssessment.answers : []
     }
   };
 }
@@ -639,7 +657,8 @@ function renderToday() {
   const quizDone = record.quizTotal >= Math.min(10, target);
   const listened = state.completedListening.some((entry) => entry.date === localDateKey());
   const screenedGoal = Math.min(500, Math.max(0, words.length - counts.screened));
-  const screeningActive = counts.screened < words.length && record.screened < screenedGoal;
+  const assessmentComplete = state.vocabAssessment.status === "complete";
+  const screeningActive = !assessmentComplete && counts.screened < words.length && record.screened < screenedGoal;
   const learningProgress = Math.min(1, record.learned / Math.max(1, target));
   const finishedParts = Number(due === 0) + learningProgress + Number(quizDone) + Number(listened);
   const percent = Math.round((finishedParts / 4) * 100);
@@ -657,6 +676,9 @@ function renderToday() {
   $("#screenedStat").textContent = counts.screened;
   $("#learnedTodayStat").textContent = record.learned;
   $("#minutesTodayStat").textContent = Math.floor(record.focusSeconds / 60);
+  $("#openVocabTest").textContent = state.vocabAssessment.status === "active"
+    ? "继续词汇量测试"
+    : assessmentComplete ? "查看测试结果" : "词汇量小测试";
 
   if (screeningActive) {
     $("#missionTitle").textContent = `快速筛查 ${Math.max(0, screenedGoal - record.screened)} 个词`;
@@ -665,7 +687,10 @@ function renderToday() {
     $("#switchStudyMode").hidden = false;
   } else if (record.learned < target) {
     $("#missionTitle").textContent = `完成今日 ${target - record.learned} 个新词`;
-    $("#missionDetail").textContent = `先处理 ${due} 个到期词，再完成新词与听音复核。`;
+    const skipped = Number(state.vocabAssessment.result?.skipped) || 0;
+    $("#missionDetail").textContent = skipped
+      ? `小测试已保守跳过 ${skipped} 个简单词；先处理 ${due} 个到期词，再学习真正需要的词。`
+      : `先处理 ${due} 个到期词，再完成新词与听音复核。`;
     $("#startMission").textContent = "开始今日单词";
     $("#switchStudyMode").hidden = true;
   } else if (!quizDone) {
@@ -688,6 +713,218 @@ function renderToday() {
   updateStageStates(record, due, quizDone, listened);
 }
 
+function cet4PlacementWords() {
+  return words.filter((word) => !word.isCET6Supplement && word.level !== "CET6");
+}
+
+function primaryTestMeaning(word) {
+  const senses = wordSenseRows(word);
+  const best = [...senses].sort((left, right) => (Number(right.stars) || 0) - (Number(left.stars) || 0))[0];
+  const partOfSpeech = best?.partOfSpeech || word?.partOfSpeech || "";
+  const meaning = best?.meaning || word?.translation || "暂无释义";
+  return `${partOfSpeech} ${meaning}`.trim();
+}
+
+function createVocabAssessmentQuestions() {
+  const pool = cet4PlacementWords();
+  const bucketCount = 8;
+  const questionsPerBucket = 3;
+  const bucketSize = Math.ceil(pool.length / bucketCount);
+  const questions = [];
+
+  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+    const start = bucket * bucketSize;
+    const bucketWords = pool.slice(start, Math.min(pool.length, start + bucketSize));
+    const unclassified = bucketWords.filter((word) => !getWordState(word));
+    const candidates = unclassified.length >= questionsPerBucket ? unclassified : bucketWords;
+    const targets = shuffle([...candidates]).slice(0, questionsPerBucket);
+
+    targets.forEach((target) => {
+      const correct = primaryTestMeaning(target);
+      const nearbyStart = Math.max(0, start - bucketSize);
+      const nearbyEnd = Math.min(pool.length, start + bucketSize * 2);
+      const used = new Set([correct]);
+      const distractors = shuffle(pool.slice(nearbyStart, nearbyEnd).filter((word) => word.word !== target.word))
+        .map(primaryTestMeaning)
+        .filter((meaning) => {
+          if (used.has(meaning)) return false;
+          used.add(meaning);
+          return true;
+        })
+        .slice(0, 3);
+      questions.push({
+        word: target.word,
+        bucket,
+        correct,
+        options: shuffle([correct, ...distractors])
+      });
+    });
+  }
+  return questions;
+}
+
+function openVocabTest() {
+  renderVocabTest();
+  const dialog = $("#vocabTestDialog");
+  if (!dialog.open) dialog.showModal();
+}
+
+function startVocabTest() {
+  if (state.vocabAssessment.status === "idle") {
+    const questions = createVocabAssessmentQuestions();
+    if (questions.length < 24) {
+      toast("暂时无法开始测试", "词库加载不完整，请刷新页面后再试。" );
+      return;
+    }
+    state.vocabAssessment = {
+      ...defaultVocabAssessment(),
+      status: "active",
+      questions,
+      startedAt: new Date().toISOString()
+    };
+    saveState();
+    renderToday();
+  }
+  renderVocabTest();
+}
+
+function renderVocabTest() {
+  const assessment = state.vocabAssessment;
+  const isActive = assessment.status === "active";
+  const isComplete = assessment.status === "complete";
+  $("#vocabTestIntro").hidden = isActive || isComplete;
+  $("#vocabTestQuestion").hidden = !isActive;
+  $("#vocabTestResult").hidden = !isComplete;
+
+  if (isActive) {
+    const total = assessment.questions.length;
+    const index = Math.max(0, Math.min(Number(assessment.currentIndex) || 0, total));
+    if (index >= total) {
+      completeVocabAssessment();
+      return;
+    }
+    const question = assessment.questions[index];
+    const word = words.find((item) => item.word === question.word);
+    if (!word || !Array.isArray(question.options) || question.options.length < 4) {
+      state.vocabAssessment = defaultVocabAssessment();
+      saveState();
+      renderVocabTest();
+      toast("测试题已更新", "请重新开始这次词汇量测试。" );
+      return;
+    }
+    $("#vocabTestPosition").textContent = `${index + 1} / ${total}`;
+    $("#vocabTestBar").style.width = `${Math.round((index / total) * 100)}%`;
+    $("#vocabTestWord").textContent = word.word;
+    $("#vocabTestPhonetic").textContent = word.phonetic ? `/${word.phonetic.replace(/^\/?|\/?$/g, "")}/` : "";
+    $("#vocabTestOptions").innerHTML = question.options.map((option, optionIndex) => `
+      <button type="button" data-vocab-answer-index="${optionIndex}">${escapeHtml(option)}</button>
+    `).join("");
+    replayMotion($("#vocabTestQuestion"), "word-enter");
+  }
+
+  if (isComplete) {
+    const result = assessment.result || {};
+    const total = Number(result.total) || 24;
+    const correct = Number(result.correct) || 0;
+    const skipped = Number(result.skipped) || 0;
+    $("#vocabEstimatedKnown").textContent = `约 ${Number(result.estimatedKnown || 0).toLocaleString("zh-CN")}`;
+    $("#vocabTestCorrect").textContent = `${correct} / ${total}`;
+    $("#vocabTestSkipped").textContent = `${skipped.toLocaleString("zh-CN")} 词`;
+    $("#vocabTestSummary").textContent = skipped
+      ? `已按保守下限跳过 ${skipped.toLocaleString("zh-CN")} 个高频简单词，并保留 10% 安全余量。答错或不确定的 ${Number(result.missed) || 0} 个测试词已加入学习队列。`
+      : `本次没有自动跳过整段词汇；答错或不确定的 ${Number(result.missed) || 0} 个测试词已加入学习队列，避免漏掉基础。`;
+  }
+}
+
+function answerVocabTest(optionIndex) {
+  const assessment = state.vocabAssessment;
+  if (assessment.status !== "active") return;
+  const index = Number(assessment.currentIndex) || 0;
+  const question = assessment.questions[index];
+  if (!question) return completeVocabAssessment();
+  const selected = Number.isInteger(optionIndex) && optionIndex >= 0 ? question.options[optionIndex] : null;
+  assessment.answers.push({
+    word: question.word,
+    bucket: question.bucket,
+    correct: selected === question.correct,
+    selected
+  });
+  assessment.currentIndex = index + 1;
+  saveState();
+  if (assessment.currentIndex >= assessment.questions.length) completeVocabAssessment();
+  else renderVocabTest();
+}
+
+function completeVocabAssessment() {
+  const assessment = state.vocabAssessment;
+  if (assessment.status !== "active") return;
+  const pool = cet4PlacementWords();
+  const answers = assessment.answers.slice(0, assessment.questions.length);
+  const correct = answers.filter((answer) => answer.correct).length;
+  const total = Math.max(1, assessment.questions.length);
+  const estimatedKnown = Math.max(0, Math.min(pool.length, Math.round(((correct / total) * pool.length) / 50) * 50));
+  const bucketScores = Array.from({ length: 8 }, (_, bucket) => answers.filter((answer) => answer.bucket === bucket && answer.correct).length);
+  let passedBuckets = 0;
+  while (passedBuckets < bucketScores.length && bucketScores[passedBuckets] >= 2) passedBuckets += 1;
+  const conservativePrefix = Math.floor(((passedBuckets / bucketScores.length) * pool.length) * 0.9);
+  const safeCutoff = Math.min(estimatedKnown, conservativePrefix);
+  const testedWords = new Set(answers.map((answer) => answer.word));
+  const timestamp = new Date().toISOString();
+  let skipped = 0;
+
+  pool.slice(0, safeCutoff).forEach((word) => {
+    if (testedWords.has(word.word) || state.wordStates[word.word]) return;
+    state.wordStates[word.word] = {
+      status: "known",
+      screenedAt: timestamp,
+      due: null,
+      reviewStep: 1,
+      audioVerified: false,
+      lastReviewedAt: timestamp,
+      placementAssumed: true
+    };
+    skipped += 1;
+  });
+
+  answers.forEach((answer) => {
+    if (state.wordStates[answer.word]) return;
+    state.wordStates[answer.word] = {
+      status: answer.correct ? "known" : "unknown",
+      screenedAt: timestamp,
+      due: answer.correct ? null : localDateKey(),
+      reviewStep: answer.correct ? 1 : 0,
+      audioVerified: false,
+      lastReviewedAt: timestamp,
+      placementTested: true
+    };
+  });
+
+  assessment.status = "complete";
+  assessment.currentIndex = total;
+  assessment.completedAt = timestamp;
+  assessment.result = {
+    total,
+    correct,
+    missed: total - correct,
+    estimatedKnown,
+    skipped,
+    safeCutoff,
+    passedBuckets
+  };
+  state.settings.presumedKnown = estimatedKnown;
+  applyRecommendedTarget();
+  saveState();
+  renderToday();
+  renderVocabTest();
+}
+
+function finishVocabTest() {
+  $("#vocabTestDialog").close();
+  currentView = "today";
+  renderNavigation();
+  openStudy("learn");
+}
+
 function updateStageStates(record, due, quizDone, listened) {
   const values = [due === 0, record.learned >= state.settings.dailyTarget, quizDone, listened];
   $$(".stage").forEach((stage, index) => {
@@ -699,7 +936,7 @@ function updateStageStates(record, due, quizDone, listened) {
 function startMissionFromState() {
   const counts = stateCounts();
   const record = todayRecord();
-  if (counts.screened < words.length && record.screened < Math.min(500, words.length - counts.screened)) return openStudy("screen");
+  if (state.vocabAssessment.status !== "complete" && counts.screened < words.length && record.screened < Math.min(500, words.length - counts.screened)) return openStudy("screen");
   if (record.learned < state.settings.dailyTarget) return openStudy("learn");
   if (record.quizTotal < Math.min(10, state.settings.dailyTarget)) return openStudy("quiz");
   currentView = "listening";
@@ -715,6 +952,7 @@ function openStudy(mode) {
     button.setAttribute("aria-selected", button.dataset.studyMode === mode ? "true" : "false");
   });
   currentWordIndex = 0;
+  screeningSessionOffset = mode === "screen" ? todayRecord().screened : 0;
   studyQueue = createStudyQueue(mode);
   stableStudyHeight = 0;
   $("#wordWorkspace").style.removeProperty("min-height");
@@ -724,7 +962,10 @@ function openStudy(mode) {
 }
 
 function createStudyQueue(mode = studyMode) {
-  if (mode === "screen") return unscreenedWords().slice(0, 500);
+  if (mode === "screen") {
+    const remaining = Math.max(0, 500 - todayRecord().screened);
+    return unscreenedWords().slice(0, remaining);
+  }
   if (mode !== "learn") return [];
   const due = dueWords();
   const dueNames = new Set(due.map((word) => word.word));
@@ -810,7 +1051,12 @@ function renderCurrentWord() {
   renderWordMeanings(currentWord);
   $("#wordRank").textContent = `词频 #${currentWord.rank || currentWord.frequency || "—"}`;
   $("#wordStatus").textContent = item ? ({ known: "认识", fuzzy: "模糊", unknown: "不认识" }[item.status] || "待复习") : "未分类";
-  $("#studyPosition").textContent = `${currentWordIndex + 1} / ${studyQueue.length}`;
+  if (studyMode === "screen") {
+    const total = Math.min(500, screeningSessionOffset + studyQueue.length);
+    $("#studyPosition").textContent = `${screeningSessionOffset + currentWordIndex + 1} / ${total}`;
+  } else {
+    $("#studyPosition").textContent = `${currentWordIndex + 1} / ${studyQueue.length}`;
+  }
   $("#wordReveal").hidden = true;
   $("#ratingActions").hidden = true;
   $("#quizOptions").hidden = true;
@@ -2863,6 +3109,15 @@ function bindEvents() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }));
   $("#startMission").addEventListener("click", startMissionFromState);
+  $("#openVocabTest").addEventListener("click", openVocabTest);
+  $("#closeVocabTest").addEventListener("click", () => $("#vocabTestDialog").close());
+  $("#startVocabTest").addEventListener("click", startVocabTest);
+  $("#vocabTestOptions").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-vocab-answer-index]");
+    if (button) answerVocabTest(Number(button.dataset.vocabAnswerIndex));
+  });
+  $("#vocabTestUnknown").addEventListener("click", () => answerVocabTest(null));
+  $("#finishVocabTest").addEventListener("click", finishVocabTest);
   $("#switchStudyMode").addEventListener("click", () => openStudy("learn"));
   $$("[data-study-mode]").forEach((button) => button.addEventListener("click", () => openStudy(button.dataset.studyMode)));
   $("#revealWord").addEventListener("click", revealCurrentWord);
@@ -3091,7 +3346,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=33", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=34", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

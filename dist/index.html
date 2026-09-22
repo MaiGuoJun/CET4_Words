@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=33" />
+    <link rel="stylesheet" href="./styles.css?v=34" />
   </head>
   <body>
     <div class="app-shell">
@@ -110,6 +110,7 @@
 
               <div class="mission-actions">
                 <button class="button primary" type="button" id="startMission">开始快速筛查</button>
+                <button class="button secondary" type="button" id="openVocabTest">词汇量小测试</button>
                 <button class="button ghost" type="button" id="switchStudyMode">直接学习今日单词</button>
               </div>
             </article>
@@ -391,7 +392,33 @@
       </form>
     </dialog>
 
+    <dialog id="vocabTestDialog">
+      <div class="dialog-card vocab-test-card">
+        <div class="dialog-head"><div><p class="card-kicker">PLACEMENT / 词汇定位</p><h2>四级词汇量小测试</h2></div><button class="icon-button" type="button" id="closeVocabTest" aria-label="关闭">×</button></div>
+        <section class="vocab-test-intro" id="vocabTestIntro">
+          <div class="vocab-test-mark">24<small>题</small></div>
+          <p>题目从简单到较难分层抽取，约 3–5 分钟。完成后会保守跳过明显简单的四级词；答错或选择“不认识”的词一定会进入学习队列。</p>
+          <div class="dialog-actions"><button class="button primary" type="button" id="startVocabTest">开始测试</button></div>
+        </section>
+        <section class="vocab-test-question" id="vocabTestQuestion" hidden>
+          <div class="vocab-test-progress"><span id="vocabTestPosition">1 / 24</span><div><i id="vocabTestBar"></i></div></div>
+          <p class="card-kicker">选择最符合的四级常用义</p>
+          <h3 id="vocabTestWord">word</h3>
+          <p class="phonetic" id="vocabTestPhonetic"></p>
+          <div class="vocab-test-options" id="vocabTestOptions"></div>
+          <button class="button ghost vocab-test-unknown" type="button" id="vocabTestUnknown">不认识 / 不确定</button>
+        </section>
+        <section class="vocab-test-result" id="vocabTestResult" hidden>
+          <p class="card-kicker">RESULT / 定位结果</p>
+          <div class="vocab-result-number"><strong id="vocabEstimatedKnown">—</strong><span>估计掌握的四级词</span></div>
+          <p id="vocabTestSummary"></p>
+          <div class="vocab-result-stats"><div><span>答对</span><strong id="vocabTestCorrect">—</strong></div><div><span>保守跳过</span><strong id="vocabTestSkipped">—</strong></div></div>
+          <div class="dialog-actions"><button class="button primary" type="button" id="finishVocabTest">开始背适合我的词</button></div>
+        </section>
+      </div>
+    </dialog>
+
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=33" defer></script>
+    <script src="./app.js?v=34" defer></script>
   </body>
 </html>

@@ -492,6 +492,33 @@ dialog::backdrop { background: rgba(1, 8, 16, 0.72); backdrop-filter: blur(7px);
 .file-drop small { color: var(--muted); }
 .dialog-actions { justify-content: flex-end; margin-top: 0; }
 
+.vocab-test-card { min-height: 430px; align-content: start; }
+.vocab-test-intro { display: grid; justify-items: center; gap: 22px; padding: 12px 4px 4px; text-align: center; }
+.vocab-test-intro > p, .vocab-test-result > p { max-width: 500px; margin: 0; color: var(--muted); line-height: 1.75; }
+.vocab-test-mark { width: 112px; height: 112px; display: grid; place-content: center; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 2.5rem; font-weight: 800; letter-spacing: -0.05em; }
+.vocab-test-mark small { margin-left: 4px; font-size: 0.75rem; letter-spacing: 0; }
+.vocab-test-intro .dialog-actions { justify-content: center; }
+.vocab-test-question { display: grid; gap: 16px; text-align: center; }
+.vocab-test-progress { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 12px; color: var(--muted); font: 700 0.75rem var(--font-ui); }
+.vocab-test-progress > div { height: 6px; overflow: hidden; border-radius: 99px; background: var(--line); }
+.vocab-test-progress i { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--accent); transition: width 240ms var(--ease-out); }
+.vocab-test-question h3 { margin: 2px 0 0; font-size: clamp(2.5rem, 8vw, 4.7rem); letter-spacing: -0.05em; }
+.vocab-test-question .phonetic { margin-top: -10px; }
+.vocab-test-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.vocab-test-options button { min-height: 62px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-soft); color: var(--text); cursor: pointer; text-align: left; line-height: 1.55; transition: transform 180ms var(--ease-out), border-color 180ms ease, background 180ms ease; }
+.vocab-test-options button:hover { border-color: var(--line-strong); background: var(--accent-soft); }
+.vocab-test-options button:active { transform: scale(0.98); }
+.vocab-test-unknown { justify-self: center; }
+.vocab-test-result { display: grid; justify-items: center; gap: 20px; padding-top: 8px; text-align: center; }
+.vocab-result-number { display: grid; gap: 4px; }
+.vocab-result-number strong { color: var(--accent); font-size: clamp(3.5rem, 10vw, 6rem); letter-spacing: -0.07em; line-height: 1; }
+.vocab-result-number span { color: var(--muted); font-size: 0.78rem; }
+.vocab-result-stats { width: min(100%, 430px); display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.vocab-result-stats > div { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel-soft); }
+.vocab-result-stats span { color: var(--muted); font-size: 0.72rem; }
+.vocab-result-stats strong { font-size: 1.1rem; }
+.vocab-test-result .dialog-actions { justify-content: center; }
+
 .toast-region { position: fixed; right: 24px; bottom: 24px; z-index: 100; display: grid; gap: 10px; pointer-events: none; }
 .toast { max-width: 360px; padding: 14px 17px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--panel-solid); box-shadow: var(--shadow); animation: toast-in 220ms ease both; }
 .toast.out { animation: toast-out 220ms ease both; }
@@ -584,6 +611,8 @@ dialog::backdrop { background: rgba(1, 8, 16, 0.72); backdrop-filter: blur(7px);
   .ai-message { max-width: 92%; }
   .ai-composer { grid-template-columns: 1fr; }
   .ai-composer-actions { grid-template-columns: 1fr 1fr; }
+  .vocab-test-options { grid-template-columns: 1fr; }
+  .vocab-test-card { min-height: min(620px, calc(100dvh - 40px)); }
   .ai-composer .button { min-height: 46px; }
   .ai-mode-switch { width: 100%; }
   .ai-mode-switch button { min-height: 40px; }
