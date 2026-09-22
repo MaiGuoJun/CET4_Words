@@ -12,7 +12,7 @@
 - 分词性考频星级释义，以及 130 条仍适用于主背词库的高频搭配；
 - 三篇可离线使用的 VOA Learning English 精听材料；
 - 本地音频导入、原文显隐、变速和 A–B 循环；
-- 智谱在线 AI 优先、Ollama 本地自动备用的情景对话、回复朗读、语法纠错、四级词汇提示和语音练习；
+- 电脑使用智谱在线 AI + Ollama 本地备用，手机可从 GitHub Pages 直连智谱，支持情景对话、回复朗读、语法纠错、四级词汇提示和语音练习；
 - 15 + 15 分钟专注计时、考试倒计时和 7 天统计；
 - Cloudflare Workers + D1 跨设备自动同步，并保留 JSON 学习记录备份与恢复；
 - Android Chrome 和 Windows Chrome/Edge 可安装使用。
@@ -40,7 +40,9 @@ ZHIPU_API_KEY=你的密钥
 ZHIPU_MODEL=glm-5.3-flash
 ```
 
-密钥只应保存在 `.env.local`，不要写入 `dist`、提交到 Git，或直接放进浏览器代码。未配置智谱或智谱暂时不可用时，服务会自动使用下面的 Ollama 备用模型。
+电脑端密钥只应保存在 `.env.local`，不要写入 `dist` 或提交到 Git。未配置智谱或智谱暂时不可用时，服务会自动使用下面的 Ollama 备用模型。
+
+手机打开 GitHub Pages 后，可进入 **设置 → 手机 AI 直连**，把同一个智谱 API Key 保存到手机浏览器。它只存在该设备的浏览器存储中，不进入学习记录、Cloudflare 同步、JSON 备份或 GitHub；手机会直接连接智谱，因此电脑关机也能使用 AI。请只在自己的设备上保存密钥，设备丢失或转交他人前先移除。
 
 1. 安装 [Ollama for Windows](https://ollama.com/download/windows)；
 2. 在 PowerShell 中运行 `ollama pull qwen3.5:2b` 下载模型；
@@ -52,10 +54,11 @@ ZHIPU_MODEL=glm-5.3-flash
 
 ## 手机与电脑自动同步
 
-应用采用两项互补的免费服务：
+应用采用互相独立的学习同步和 AI 连接：
 
 - Cloudflare Workers + D1 保存学习记录。电脑关机后，手机仍能学习和同步；
-- Tailscale Serve 在电脑开机时提供私人入口，让手机安全使用电脑上的 Ollama AI 和真人发音代理。
+- 手机 AI 可以在 GitHub Pages 上直接连接智谱，不依赖电脑或 Tailscale；
+- Tailscale Serve 仅作为可选方案，在电脑开机时让手机使用电脑上的 Ollama AI 和真人发音代理。
 
 Cloudflare 是唯一的同步数据源，不会与 Tailscale 产生两份互相覆盖的云端记录。每台设备仍会保留本地副本，离线修改会在恢复网络后自动合并。同步密码仅保存在各设备浏览器中，不写入代码、Git 仓库或 JSON 备份。
 
@@ -81,7 +84,7 @@ Tailscale 安装后，在电脑登录自己的账号，并在手机登录同一�
 
 ## 发布到 GitHub Pages
 
-仓库已包含 GitHub Pages 工作流，线上地址为 `https://maiguojun.github.io/CET4_Words/`。Pages 可使用 Cloudflare 同步；本地 AI 仍需要通过本机地址或 Tailscale 私人入口访问电脑上的 Ollama。
+仓库已包含 GitHub Pages 工作流，线上地址为 `https://maiguojun.github.io/CET4_Words/`。Pages 可在设置页保存设备专用的智谱 API Key，从手机直接使用 AI；若要使用电脑上的 Ollama，则仍需本机地址或 Tailscale 私人入口。
 
 ## 数据来源
 

@@ -11,6 +11,9 @@ const SYNC_CONFIG_KEY = "mogu-cet4-sync-config-v1";
 const SYNC_DEVICE_KEY = "mogu-cet4-sync-device-v1";
 const SYNC_POLL_MS = 45 * 1000;
 const DEFAULT_SYNC_ENDPOINT = "https://mogu-cet4-sync.wb408study.workers.dev";
+const DEVICE_AI_CONFIG_KEY = "mogu-cet4-device-ai-v1";
+const ZHIPU_CHAT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const DEFAULT_ZHIPU_MODEL = "glm-5.3-flash";
 
 const fallbackWords = [
   { word: "access", phonetic: "ˈækses", partOfSpeech: "n. / v.", translation: "进入、存取", frequency: 86, phrase: "have access to", phraseMeaning: "有权使用；可以接近" },
@@ -100,6 +103,8 @@ let pronunciationAudioSource = null;
 let aiPending = false;
 let aiServiceStatus = "checking";
 let aiServiceInfo = null;
+let aiBackendAvailable = false;
+let deviceAIConfig = loadDeviceAIConfig();
 let aiTextSpeech = { utterance: null, messageIndex: null };
 let voiceSession = {
   state: "idle",
@@ -108,7 +113,7 @@ let voiceSession = {
   restartTimer: null,
   utterance: null,
   statusMessage: "准备开始语音练习",
-  hintMessage: "点击开始，说一句英语；本地 AI 会回答并由系统朗读。",
+  hintMessage: "点击开始，说一句英语；AI 会回答并由系统朗读。",
   transcript: ""
 };
 let textDictation = {
@@ -182,6 +187,20 @@ function loadSyncConfig() {
 
 function saveSyncConfig() {
   localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(syncConfig));
+}
+
+function loadDeviceAIConfig() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DEVICE_AI_CONFIG_KEY));
+    const model = ["glm-5.3-flash", "glm-5.3-flashx"].includes(parsed?.model) ? parsed.model : DEFAULT_ZHIPU_MODEL;
+    return { apiKey: String(parsed?.apiKey || "").trim(), model };
+  } catch {
+    return { apiKey: "", model: DEFAULT_ZHIPU_MODEL };
+  }
+}
+
+function saveDeviceAIConfig() {
+  localStorage.setItem(DEVICE_AI_CONFIG_KEY, JSON.stringify(deviceAIConfig));
 }
 
 function syncDeviceId() {
@@ -391,7 +410,7 @@ function storageScopeInfo() {
   if (hostname === "maiguojun.github.io") {
     return {
       label: "GitHub Pages 在线应用",
-      hint: syncConfig.endpoint && syncConfig.token ? "已连接 Cloudflare，手机和电脑会读取同一份学习记录。" : "连接 Cloudflare 后即可跨设备自动同步；本地 AI 需要使用私人电脑入口。",
+      hint: syncConfig.endpoint && syncConfig.token ? "已连接 Cloudflare，手机和电脑会读取同一份学习记录。" : "学习记录保存在当前浏览器；可在下方单独配置手机 AI。",
       warning: false
     };
   }
@@ -1702,7 +1721,9 @@ function renderAI() {
   const status = $("#aiStatus");
   status.classList.toggle("ready", aiServiceStatus === "ready");
   status.classList.toggle("offline", aiServiceStatus === "offline");
-  const providerName = aiServiceInfo?.provider === "zhipu" ? "智谱" : aiServiceInfo?.provider === "ollama" ? "本地" : "AI";
+  const providerName = aiServiceInfo?.provider === "zhipu"
+    ? aiServiceInfo?.transport === "direct" ? "智谱直连" : "智谱"
+    : aiServiceInfo?.provider === "ollama" ? "本地" : "AI";
   const modelName = String(aiServiceInfo?.model || "").replace(/^glm-/i, "GLM-");
   status.textContent = aiServiceStatus === "ready"
     ? `${providerName} ${modelName} 已就绪`.replace(/\s+/g, " ")
@@ -1763,9 +1784,9 @@ function renderVoiceUI() {
   if (!stage) return;
   const labels = {
     idle: [voiceSession.statusMessage, voiceSession.hintMessage],
-    connecting: ["正在启动本地语音练习…", "首次使用时，请允许浏览器访问麦克风。"],
-    listening: ["正在听你说…", "说完一句后停顿一下，本地 AI 会开始回答。"],
-    thinking: ["本地 AI 正在思考…", "首次回答可能需要等待模型载入。"],
+    connecting: ["正在启动语音练习…", "首次使用时，请允许浏览器访问麦克风。"],
+    listening: ["正在听你说…", "说完一句后停顿一下，AI 会开始回答。"],
+    thinking: ["AI 正在思考…", "在线回答可能需要等待十几秒。"],
     speaking: ["AI 正在朗读回答…", "朗读结束后会自动继续听你说。"],
     error: [voiceSession.statusMessage, voiceSession.hintMessage]
   };
@@ -1800,7 +1821,7 @@ function settleVoiceSession(message = "本次语音练习已结束") {
   renderVoiceUI();
 }
 
-function failVoiceSession(message, hint = "请检查麦克风权限，并确认本地 AI 已启动。") {
+function failVoiceSession(message, hint = "请检查麦克风权限与 AI 配置后重试。") {
   closeVoiceResources();
   voiceSession.active = false;
   voiceSession.state = "error";
@@ -2047,6 +2068,88 @@ function speakVoiceReply(text) {
   });
 }
 
+function buildTutorInstructions(scenario) {
+  const current = AI_SCENARIOS[scenario] || AI_SCENARIOS.campus;
+  return `You are the private English tutor inside 蘑菇酱四级 for one Chinese learner preparing for CET-4 and aiming for 500+. The learner is around B1 and wants practical conversation plus gentle correction. The current scenario is ${current.title}: ${current.goal}
+
+Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. Correct only the one or two mistakes that matter most. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
+
+Return only a valid JSON object with this shape: {"reply":"English reply","feedback":[{"original":"learner wording","correction":"natural correction","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. Use empty arrays when there is nothing useful to add. Include at most two feedback items and two vocabulary items.`;
+}
+
+function parseDirectTutorReply(text) {
+  const cleaned = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    const parsed = JSON.parse(cleaned);
+    return {
+      reply: typeof parsed.reply === "string" ? parsed.reply.trim() : "",
+      feedback: Array.isArray(parsed.feedback) ? parsed.feedback.slice(0, 2) : [],
+      vocabulary: Array.isArray(parsed.vocabulary) ? parsed.vocabulary.slice(0, 2) : []
+    };
+  } catch {
+    return { reply: cleaned, feedback: [], vocabulary: [] };
+  }
+}
+
+async function requestDirectZhipu({ scenario, history, message }) {
+  if (!deviceAIConfig.apiKey) throw new Error("请先在设置中保存智谱 API Key。");
+  const safeHistory = Array.isArray(history) ? history.slice(-12).flatMap((item) => {
+    const role = item?.role === "assistant" ? "assistant" : item?.role === "user" ? "user" : null;
+    const content = typeof item?.content === "string" ? item.content.trim().slice(0, 1200) : "";
+    return role && content ? [{ role, content }] : [];
+  }) : [];
+  const response = await fetch(ZHIPU_CHAT_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${deviceAIConfig.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: deviceAIConfig.model,
+      messages: [{ role: "system", content: buildTutorInstructions(scenario) }, ...safeHistory, { role: "user", content: message }],
+      stream: false,
+      thinking: { type: "enabled", clear_thinking: false },
+      response_format: { type: "json_object" },
+      temperature: 1,
+      top_p: 0.95,
+      max_tokens: 2048
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if ([401, 403].includes(response.status)) throw new Error("智谱 API Key 无效或无权使用该模型，请重新填写。");
+    if (response.status === 429) throw new Error("智谱请求过多或额度不足，请稍后再试。");
+    throw new Error(data?.error?.message || `智谱暂时无法连接（${response.status}）。`);
+  }
+  const raw = data?.choices?.[0]?.message?.content;
+  const content = Array.isArray(raw)
+    ? raw.map((item) => typeof item === "string" ? item : String(item?.text || item?.content || "")).join("")
+    : raw;
+  const result = parseDirectTutorReply(content);
+  if (!result.reply) throw new Error("智谱没有生成有效回复，请再试一次。");
+  return { ...result, provider: "zhipu", model: String(data?.model || deviceAIConfig.model), transport: "direct" };
+}
+
+async function requestAIReply(payload) {
+  let backendError = null;
+  if (aiBackendAvailable) {
+    try {
+      const response = await fetch("./api/ai-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "AI 暂时无法回复，请稍后重试。");
+      return result;
+    } catch (error) {
+      backendError = error;
+    }
+  }
+  if (deviceAIConfig.apiKey) return requestDirectZhipu(payload);
+  throw backendError || new Error("请先在设置中配置手机 AI，或在电脑上启动本机服务。");
+}
+
 async function submitVoiceTurn(content) {
   if (!voiceSession.active || aiPending) return;
   const messages = currentAISession();
@@ -2060,13 +2163,8 @@ async function submitVoiceTurn(content) {
   renderAI();
 
   try {
-    const response = await fetch("./api/ai-chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scenario: state.ai.scenario, history, message: content })
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "本地 AI 暂时无法回复。" );
+    const result = await requestAIReply({ scenario: state.ai.scenario, history, message: content });
+    if (result.provider) aiServiceInfo = { provider: result.provider, model: result.model || "", transport: result.transport || "backend" };
     const reply = String(result.reply || "Could you tell me a little more?");
     messages.push({
       role: "assistant",
@@ -2082,7 +2180,7 @@ async function submitVoiceTurn(content) {
     await speakVoiceReply(reply);
     if (voiceSession.active) scheduleVoiceListening(300);
   } catch (error) {
-    failVoiceSession("本地 AI 没有成功回答", error.message || "请确认 Ollama 正在运行。" );
+    failVoiceSession("AI 没有成功回答", error.message || "请检查 AI 配置后重试。" );
   } finally {
     aiPending = false;
     renderAI();
@@ -2091,7 +2189,7 @@ async function submitVoiceTurn(content) {
 
 function startVoiceConversation() {
   if (aiServiceStatus !== "ready") {
-    return failVoiceSession("本地 AI 尚未就绪", "请先启动 Ollama 并下载应用所需模型。" );
+    return failVoiceSession("AI 尚未就绪", "请先在设置中配置手机 AI，或在电脑上启动本机服务。" );
   }
   if (!speechRecognitionConstructor()) {
     return failVoiceSession("当前浏览器不支持语音识别", "请使用最新版 Chrome 或 Edge，也可以继续使用文字对话。" );
@@ -2124,15 +2222,21 @@ function toggleVoiceConversation() {
 }
 
 async function checkAIStatus() {
+  aiBackendAvailable = false;
   try {
     const response = await fetch("./api/ai-status", { cache: "no-store" });
     if (!response.ok) throw new Error("status unavailable");
     const result = await response.json();
-    aiServiceInfo = result;
-    aiServiceStatus = result.configured ? "ready" : "offline";
+    aiBackendAvailable = Boolean(result.configured);
+    aiServiceInfo = aiBackendAvailable
+      ? result
+      : deviceAIConfig.apiKey ? { provider: "zhipu", model: deviceAIConfig.model, transport: "direct" } : result;
+    aiServiceStatus = aiBackendAvailable || deviceAIConfig.apiKey ? "ready" : "offline";
   } catch {
-    aiServiceInfo = null;
-    aiServiceStatus = "offline";
+    aiServiceInfo = deviceAIConfig.apiKey
+      ? { provider: "zhipu", model: deviceAIConfig.model, transport: "direct" }
+      : null;
+    aiServiceStatus = deviceAIConfig.apiKey ? "ready" : "offline";
   }
   renderAI();
 }
@@ -2157,14 +2261,8 @@ async function sendAIMessage(event) {
   renderAI();
 
   try {
-    const response = await fetch("./api/ai-chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scenario: state.ai.scenario, history, message: content })
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "AI 暂时无法回复，请稍后重试。");
-    if (result.provider) aiServiceInfo = { provider: result.provider, model: result.model || "" };
+    const result = await requestAIReply({ scenario: state.ai.scenario, history, message: content });
+    if (result.provider) aiServiceInfo = { provider: result.provider, model: result.model || "", transport: result.transport || "backend" };
     messages.push({
       role: "assistant",
       content: String(result.reply || "Let’s try another way. Could you tell me a little more?"),
@@ -2242,7 +2340,44 @@ function renderSettings() {
   $("#restoreRecovery").hidden = !localStorage.getItem(`${STORAGE_KEY}-recovery`);
   renderStorageScope();
   renderSyncStatus();
+  renderDeviceAISettings();
   renderVoices();
+}
+
+function renderDeviceAISettings() {
+  const pill = $("#deviceAIStatus");
+  if (!pill) return;
+  const configured = Boolean(deviceAIConfig.apiKey);
+  pill.dataset.state = configured ? "synced" : "unconfigured";
+  $("span", pill).textContent = configured ? "此设备已保存" : "尚未配置";
+  $("#deviceAIModelSelect").value = deviceAIConfig.model || DEFAULT_ZHIPU_MODEL;
+  $("#deviceAIKeyInput").placeholder = configured ? "已保存；如不修改可留空" : "只保存在这台设备的浏览器中";
+  $("#clearDeviceAI").disabled = !configured;
+}
+
+async function configureDeviceAI() {
+  const input = $("#deviceAIKeyInput");
+  const apiKey = input.value.trim() || deviceAIConfig.apiKey;
+  if (apiKey.length < 20) return toast("请填写有效的 API Key", "从智谱开放平台复制完整密钥后再保存。" );
+  deviceAIConfig = {
+    apiKey,
+    model: $("#deviceAIModelSelect").value || DEFAULT_ZHIPU_MODEL
+  };
+  saveDeviceAIConfig();
+  input.value = "";
+  await checkAIStatus();
+  renderSettings();
+  toast("手机 AI 已配置", "现在可以回到 AI 对话直接使用智谱。" );
+}
+
+async function clearDeviceAIConfig() {
+  if (!deviceAIConfig.apiKey || !window.confirm("移除只保存在此设备上的智谱 API Key？")) return;
+  localStorage.removeItem(DEVICE_AI_CONFIG_KEY);
+  deviceAIConfig = loadDeviceAIConfig();
+  $("#deviceAIKeyInput").value = "";
+  await checkAIStatus();
+  renderSettings();
+  toast("已移除手机 AI 密钥");
 }
 
 function renderSyncStatus() {
@@ -2476,6 +2611,8 @@ function bindEvents() {
   $("#voiceSelect").addEventListener("change", (event) => { state.settings.voiceURI = event.target.value; saveState(); });
   $("#themeSelect").addEventListener("change", (event) => { state.settings.theme = event.target.value; saveState(); applyTheme(); });
   $("#themeQuick").addEventListener("click", () => { state.settings.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; saveState(); applyTheme(); renderSettings(); });
+  $("#saveDeviceAI").addEventListener("click", () => { void configureDeviceAI(); });
+  $("#clearDeviceAI").addEventListener("click", () => { void clearDeviceAIConfig(); });
   $("#connectSync").addEventListener("click", () => { void connectCloudSync(); });
   $("#syncNow").addEventListener("click", () => { void syncNow({ notify: true }); });
   $("#disconnectSync").addEventListener("click", disconnectCloudSync);
@@ -2597,7 +2734,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=31", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=32", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
