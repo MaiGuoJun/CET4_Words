@@ -12,18 +12,18 @@
 - 分词性考频星级释义，以及 130 条仍适用于主背词库的高频搭配；
 - 三篇可离线使用的 VOA Learning English 精听材料；
 - 本地音频导入、原文显隐、变速和 A–B 循环；
-- Ollama 本地 AI 文字情景对话、回复可选朗读、重点语法纠错、四级词汇提示和免费语音练习；
+- 智谱在线 AI 优先、Ollama 本地自动备用的情景对话、回复朗读、语法纠错、四级词汇提示和语音练习；
 - 15 + 15 分钟专注计时、考试倒计时和 7 天统计；
 - Cloudflare Workers + D1 跨设备自动同步，并保留 JSON 学习记录备份与恢复；
 - Android Chrome 和 Windows Chrome/Edge 可安装使用。
 
-学习记录和 AI 对话历史默认先保存在当前浏览器；配置 Cloudflare 同步后，会在手机和电脑间自动合并。AI 回复由本机 Ollama 模型生成，不需要 OpenAI API Key，也不会产生 API 调用费用。
+学习记录和 AI 对话历史默认先保存在当前浏览器；配置 Cloudflare 同步后，会在手机和电脑间自动合并。配置智谱 API Key 后优先使用智谱，调用失败时自动切回本机 Ollama；没有配置 Key 时只使用 Ollama。
 
 单词会优先播放在线词典提供的真人录音，并按设置选择美音或英音；没有对应录音、离线或播放失败时，自动改用设备系统声音。真人录音功能不需要 API Key，但使用时需要联网。
 
 ## 本地运行
 
-项目带有一个不依赖第三方软件包的本机服务。它会打开 `dist` 静态站点，把 AI 请求转发给本机 Ollama，并代为获取真人发音录音：
+项目带有一个不依赖第三方软件包的本机服务。它会打开 `dist` 静态站点，把 AI 请求安全转发给智谱或本机 Ollama，并代为获取真人发音录音：
 
 ```powershell
 node server.mjs
@@ -31,15 +31,24 @@ node server.mjs
 
 然后打开 `http://127.0.0.1:4174/`。
 
-## 启用本地 AI 对话
+## 启用 AI 对话
+
+如有智谱开放平台 API Key，在 `.env.local` 中添加：
+
+```dotenv
+ZHIPU_API_KEY=你的密钥
+ZHIPU_MODEL=glm-5.3-flash
+```
+
+密钥只应保存在 `.env.local`，不要写入 `dist`、提交到 Git，或直接放进浏览器代码。未配置智谱或智谱暂时不可用时，服务会自动使用下面的 Ollama 备用模型。
 
 1. 安装 [Ollama for Windows](https://ollama.com/download/windows)；
 2. 在 PowerShell 中运行 `ollama pull qwen3.5:2b` 下载模型；
 3. 运行 `node server.mjs`，然后打开 `http://127.0.0.1:4174/`。
 
-默认模型为 `qwen3.5:2b`，适合日常对话的速度与中英文纠错。如需更高质量，可在 `.env.local` 中添加 `OLLAMA_MODEL=qwen3.5:9b`。`.env.local` 已加入 `.gitignore`，不会被 Git 提交。Ollama 未启动时，其余学习功能仍可正常使用。
+默认备用模型为 `qwen3.5:2b`，适合日常对话的速度与中英文纠错。如需更高质量，可在 `.env.local` 中添加 `OLLAMA_MODEL=qwen3.5:4b`。`.env.local` 已加入 `.gitignore`，不会被 Git 提交。AI 服务未启动时，其余学习功能仍可正常使用。
 
-打开 **AI 对话 → 本地语音**，点击“开始语音练习”并允许麦克风即可。AI 回复由本机模型生成并由系统声音朗读；语音识别使用 Chrome/Edge 提供的浏览器能力，部分浏览器可能联网完成识别，但应用不会保存录音。
+打开 **AI 对话 → 本地语音**，点击“开始语音练习”并允许麦克风即可。AI 回复由当前配置的 AI 服务生成并由系统声音朗读；语音识别使用 Chrome/Edge 提供的浏览器能力，部分浏览器可能联网完成识别，但应用不会保存录音。
 
 ## 手机与电脑自动同步
 

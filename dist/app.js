@@ -99,6 +99,7 @@ let pronunciationAudioContext = null;
 let pronunciationAudioSource = null;
 let aiPending = false;
 let aiServiceStatus = "checking";
+let aiServiceInfo = null;
 let aiTextSpeech = { utterance: null, messageIndex: null };
 let voiceSession = {
   state: "idle",
@@ -1701,7 +1702,11 @@ function renderAI() {
   const status = $("#aiStatus");
   status.classList.toggle("ready", aiServiceStatus === "ready");
   status.classList.toggle("offline", aiServiceStatus === "offline");
-  status.textContent = aiServiceStatus === "ready" ? "本地 AI 已就绪" : aiServiceStatus === "offline" ? "需要启动本地 AI" : "正在检查本地 AI";
+  const providerName = aiServiceInfo?.provider === "zhipu" ? "智谱" : aiServiceInfo?.provider === "ollama" ? "本地" : "AI";
+  const modelName = String(aiServiceInfo?.model || "").replace(/^glm-/i, "GLM-");
+  status.textContent = aiServiceStatus === "ready"
+    ? `${providerName} ${modelName} 已就绪`.replace(/\s+/g, " ")
+    : aiServiceStatus === "offline" ? "需要启动 AI 服务" : "正在检查 AI 服务";
 
   $("#aiMessages").innerHTML = messages.map((message, index) => `
     <div class="ai-message ${message.role === "user" ? "user" : "assistant"} ${index === messages.length - 1 ? "latest" : ""}">
@@ -2123,8 +2128,10 @@ async function checkAIStatus() {
     const response = await fetch("./api/ai-status", { cache: "no-store" });
     if (!response.ok) throw new Error("status unavailable");
     const result = await response.json();
+    aiServiceInfo = result;
     aiServiceStatus = result.configured ? "ready" : "offline";
   } catch {
+    aiServiceInfo = null;
     aiServiceStatus = "offline";
   }
   renderAI();
@@ -2157,6 +2164,7 @@ async function sendAIMessage(event) {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "AI 暂时无法回复，请稍后重试。");
+    if (result.provider) aiServiceInfo = { provider: result.provider, model: result.model || "" };
     messages.push({
       role: "assistant",
       content: String(result.reply || "Let’s try another way. Could you tell me a little more?"),
@@ -2589,7 +2597,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=29", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=31", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

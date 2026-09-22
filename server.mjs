@@ -30,6 +30,9 @@ await loadLocalEnvironment();
 const PORT = Number(process.env.PORT) || 4174;
 const MODEL = process.env.OLLAMA_MODEL || "qwen3.5:2b";
 const OLLAMA_URL = (process.env.OLLAMA_URL || "http://127.0.0.1:11434").replace(/\/$/, "");
+const ZHIPU_API_KEY = String(process.env.ZHIPU_API_KEY || "").trim();
+const ZHIPU_MODEL = String(process.env.ZHIPU_MODEL || "glm-5.3-flash").trim();
+const ZHIPU_BASE_URL = (process.env.ZHIPU_BASE_URL || "https://open.bigmodel.cn/api/paas/v4").replace(/\/$/, "");
 const MAX_BODY_BYTES = 48 * 1024;
 const rateLimits = new Map();
 const pronunciationCache = new Map();
@@ -263,6 +266,60 @@ function parseTutorReply(text) {
   }
 }
 
+async function requestZhipu(messages) {
+  const upstream = await fetch(`${ZHIPU_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ZHIPU_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: ZHIPU_MODEL,
+      messages,
+      stream: false,
+      thinking: { type: "enabled", clear_thinking: false },
+      response_format: { type: "json_object" },
+      temperature: 1,
+      top_p: 0.95,
+      max_tokens: 2048
+    }),
+    signal: AbortSignal.timeout(60000)
+  });
+  if (!upstream.ok) throw new Error(`ZHIPU_HTTP_${upstream.status}`);
+  const data = await upstream.json();
+  const choice = data?.choices?.[0];
+  const rawContent = choice?.message?.content;
+  const content = Array.isArray(rawContent)
+    ? rawContent.map((item) => typeof item === "string" ? item : String(item?.text || item?.content || "")).join("")
+    : rawContent;
+  if (!content) {
+    const reasoningLength = String(choice?.message?.reasoning_content || "").length;
+    throw new Error(`ZHIPU_EMPTY_REPLY_${choice?.finish_reason || "unknown"}_REASONING_${reasoningLength}`);
+  }
+  return { content, provider: "zhipu", model: String(data?.model || ZHIPU_MODEL) };
+}
+
+async function requestOllama(messages) {
+  const upstream = await fetch(`${OLLAMA_URL}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: MODEL,
+      messages,
+      stream: false,
+      think: false,
+      format: "json",
+      keep_alive: "10m",
+      options: { temperature: 0.55, num_predict: 360 }
+    }),
+    signal: AbortSignal.timeout(120000)
+  });
+  if (!upstream.ok) throw new Error(`OLLAMA_HTTP_${upstream.status}`);
+  const data = await upstream.json();
+  if (!data?.message?.content) throw new Error("OLLAMA_EMPTY_REPLY");
+  return { content: data.message.content, provider: "ollama", model: MODEL };
+}
+
 async function handleAIChat(request, response) {
   if (!allowRequest(request)) return json(response, 429, { error: "请求有点频繁，请稍等几分钟再继续练习。" });
 
@@ -288,50 +345,58 @@ Keep the conversation natural and encouraging, but do not give empty praise. Rep
 
 Return only a valid JSON object with this shape: {"reply":"English reply","feedback":[{"original":"learner wording","correction":"natural correction","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. Use empty arrays when there is nothing useful to add. Include at most two feedback items and two vocabulary items.`;
 
+  const messages = [{ role: "system", content: instructions }, ...history, { role: "user", content: message }];
+  const failures = [];
   try {
-    const upstream = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [{ role: "system", content: instructions }, ...history, { role: "user", content: message }],
-        stream: false,
-        think: false,
-        format: "json",
-        keep_alive: "10m",
-        options: { temperature: 0.55, num_predict: 360 }
-      }),
-      signal: AbortSignal.timeout(120000)
-    });
-    if (!upstream.ok) {
-      console.error(`Ollama request failed with status ${upstream.status}`);
-      const safeMessage = upstream.status === 404
-        ? `本地模型 ${MODEL} 尚未下载，请先运行 ollama pull ${MODEL}。`
-        : "本地 AI 暂时不可用，请确认 Ollama 正在运行。";
-      return json(response, 502, { error: safeMessage });
+    let completion;
+    if (ZHIPU_API_KEY) {
+      try {
+        completion = await requestZhipu(messages);
+      } catch (error) {
+        failures.push(error);
+        console.error("Zhipu request failed; trying local fallback:", error.message);
+      }
     }
-    const data = await upstream.json();
-    const result = parseTutorReply(data?.message?.content);
+    if (!completion) completion = await requestOllama(messages);
+    const result = parseTutorReply(completion.content);
     if (!result.reply) return json(response, 502, { error: "AI 没有生成有效回复，请再试一次。" });
-    return json(response, 200, result);
+    return json(response, 200, { ...result, provider: completion.provider, model: completion.model });
   } catch (error) {
-    console.error("Ollama connection failed:", error.message);
+    failures.push(error);
+    console.error("All AI providers failed:", failures.map((item) => item.message).join(", "));
     const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
-    return json(response, 502, { error: timedOut ? "本地 AI 回复超时，请稍后再试。" : "无法连接本地 AI，请确认 Ollama 已安装并正在运行。" });
+    return json(response, 502, {
+      error: timedOut
+        ? "AI 回复超时，请稍后再试。"
+        : ZHIPU_API_KEY
+          ? "智谱暂时不可用，本地备用模型也未能连接。"
+          : "无法连接本地 AI，请确认 Ollama 已安装并正在运行。"
+    });
   }
 }
 
 async function getLocalAIStatus() {
+  let local = { configured: false, running: false, modelInstalled: false };
   try {
     const upstream = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(2500) });
     if (!upstream.ok) throw new Error(`status ${upstream.status}`);
     const data = await upstream.json();
     const modelNames = Array.isArray(data.models) ? data.models.map((item) => String(item?.name || item?.model || "")) : [];
     const installed = modelNames.some((name) => name === MODEL || name === `${MODEL}:latest`);
-    return { configured: installed, provider: "ollama", model: MODEL, running: true, modelInstalled: installed, voiceMode: "browser" };
-  } catch {
-    return { configured: false, provider: "ollama", model: MODEL, running: false, modelInstalled: false, voiceMode: "browser" };
+    local = { configured: installed, running: true, modelInstalled: installed };
+  } catch {}
+  if (ZHIPU_API_KEY) {
+    return {
+      configured: true,
+      provider: "zhipu",
+      model: ZHIPU_MODEL,
+      running: true,
+      modelInstalled: true,
+      fallback: { provider: "ollama", model: MODEL, ...local },
+      voiceMode: "browser"
+    };
   }
+  return { ...local, provider: "ollama", model: MODEL, voiceMode: "browser" };
 }
 
 async function serveStatic(request, response, requestUrl) {
@@ -382,5 +447,7 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`蘑菇酱四级已启动：http://127.0.0.1:${PORT}/`);
-  console.log(`本地 AI：Ollama / ${MODEL}`);
+  console.log(ZHIPU_API_KEY
+    ? `AI：智谱 / ${ZHIPU_MODEL}（本地备用：Ollama / ${MODEL}）`
+    : `AI：Ollama / ${MODEL}`);
 });
