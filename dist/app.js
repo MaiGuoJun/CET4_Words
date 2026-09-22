@@ -13,6 +13,7 @@ const SYNC_POLL_MS = 45 * 1000;
 const DEFAULT_SYNC_ENDPOINT = "https://mogu-cet4-sync.wb408study.workers.dev";
 const DEVICE_AI_CONFIG_KEY = "mogu-cet4-device-ai-v1";
 const ZHIPU_CHAT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const ZHIPU_ASR_URL = "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions";
 const DEFAULT_ZHIPU_MODEL = "glm-5.3-flash";
 
 const fallbackWords = [
@@ -105,20 +106,31 @@ let aiServiceStatus = "checking";
 let aiServiceInfo = null;
 let aiBackendAvailable = false;
 let deviceAIConfig = loadDeviceAIConfig();
-let aiTextSpeech = { utterance: null, messageIndex: null };
+let aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: false, messageIndex: null };
 let voiceSession = {
   state: "idle",
   active: false,
   recognition: null,
   restartTimer: null,
   utterance: null,
+  audio: null,
+  objectUrl: null,
   statusMessage: "准备开始语音练习",
   hintMessage: "点击开始，说一句英语；AI 会回答并由系统朗读。",
   transcript: ""
 };
 let textDictation = {
   recognition: null,
+  mediaRecorder: null,
+  mediaStream: null,
+  mediaChunks: [],
+  stopTimer: null,
+  abortRecording: false,
   listening: false,
+  starting: false,
+  processing: false,
+  mode: null,
+  statusMessage: "",
   baseText: "",
   finalText: ""
 };
@@ -193,9 +205,11 @@ function loadDeviceAIConfig() {
   try {
     const parsed = JSON.parse(localStorage.getItem(DEVICE_AI_CONFIG_KEY));
     const model = ["glm-5.3-flash", "glm-5.3-flashx"].includes(parsed?.model) ? parsed.model : DEFAULT_ZHIPU_MODEL;
-    return { apiKey: String(parsed?.apiKey || "").trim(), model };
+    const speechInput = ["glm-asr", "browser"].includes(parsed?.speechInput) ? parsed.speechInput : "glm-asr";
+    const speechVoice = ["glm-4-voice", "system"].includes(parsed?.speechVoice) ? parsed.speechVoice : "glm-4-voice";
+    return { apiKey: String(parsed?.apiKey || "").trim(), model, speechInput, speechVoice };
   } catch {
-    return { apiKey: "", model: DEFAULT_ZHIPU_MODEL };
+    return { apiKey: "", model: DEFAULT_ZHIPU_MODEL, speechInput: "glm-asr", speechVoice: "glm-4-voice" };
   }
 }
 
@@ -1744,6 +1758,7 @@ function renderAI() {
     </div>` : "");
   $("#aiSend").disabled = aiPending;
   $("#aiInput").disabled = aiPending;
+  renderAITextSpeechButtons();
   renderTextDictation();
   renderVoiceUI();
   requestAnimationFrame(() => { $("#aiMessages").scrollTop = $("#aiMessages").scrollHeight; });
@@ -1809,7 +1824,14 @@ function closeVoiceResources() {
   voiceSession.recognition = null;
   try { recognition?.abort(); } catch {}
   if ("speechSynthesis" in window) speechSynthesis.cancel();
+  if (voiceSession.audio) {
+    voiceSession.audio.pause();
+    voiceSession.audio.src = "";
+  }
+  if (voiceSession.objectUrl) URL.revokeObjectURL(voiceSession.objectUrl);
   voiceSession.utterance = null;
+  voiceSession.audio = null;
+  voiceSession.objectUrl = null;
 }
 
 function settleVoiceSession(message = "本次语音练习已结束") {
@@ -1849,10 +1871,23 @@ function speechRecognitionConstructor() {
 function renderTextDictation() {
   const button = $("#aiDictation");
   if (!button) return;
-  button.disabled = aiPending || state.ai.mode !== "text";
+  button.disabled = aiPending || textDictation.starting || textDictation.processing || state.ai.mode !== "text";
   button.classList.toggle("listening", textDictation.listening);
   button.setAttribute("aria-pressed", String(textDictation.listening));
-  button.textContent = textDictation.listening ? "停止听写" : "语音输入";
+  button.textContent = textDictation.starting
+    ? "正在启动…"
+    : textDictation.processing
+    ? "正在识别…"
+    : textDictation.listening ? textDictation.mode === "cloud" ? "结束录音" : "停止听写" : "语音输入";
+  const status = $("#aiDictationStatus");
+  if (!status) return;
+  status.textContent = textDictation.starting
+    ? textDictation.statusMessage || "正在请求麦克风权限…"
+    : textDictation.processing
+    ? "正在把录音转换成文字，请稍等…"
+    : textDictation.listening
+      ? textDictation.mode === "cloud" ? "正在录音；说完后点“结束录音”，最长 20 秒。" : "正在听你说；说完后停顿一下。"
+      : textDictation.statusMessage || "语音输入只会填入文字，不会自动发送。Enter 发送 · Shift + Enter 换行。";
 }
 
 function joinDictationText(baseText, spokenText) {
@@ -1865,9 +1900,22 @@ function joinDictationText(baseText, spokenText) {
 }
 
 function stopTextDictation(abort = false) {
+  clearTimeout(textDictation.stopTimer);
+  textDictation.stopTimer = null;
+  if (textDictation.mediaRecorder) {
+    const recorder = textDictation.mediaRecorder;
+    textDictation.abortRecording = abort;
+    textDictation.listening = false;
+    renderTextDictation();
+    try {
+      if (recorder.state !== "inactive") recorder.stop();
+    } catch {}
+    return;
+  }
   const recognition = textDictation.recognition;
   textDictation.recognition = null;
   textDictation.listening = false;
+  textDictation.mode = null;
   renderTextDictation();
   if (!recognition) return;
   try {
@@ -1878,15 +1926,172 @@ function stopTextDictation(abort = false) {
   }
 }
 
+function encodeMonoWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeAscii = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+  };
+  writeAscii(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeAscii(8, "WAVE");
+  writeAscii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  for (let index = 0; index < samples.length; index += 1) {
+    const value = Math.max(-1, Math.min(1, samples[index]));
+    view.setInt16(44 + index * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+async function convertRecordingToWav(blob) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) throw new Error("当前浏览器无法处理录音格式，请换用最新版 Chrome。" );
+  const context = new AudioContextClass();
+  try {
+    const decoded = await context.decodeAudioData((await blob.arrayBuffer()).slice(0));
+    const targetRate = 16000;
+    const source = decoded.getChannelData(0);
+    const ratio = decoded.sampleRate / targetRate;
+    const output = new Float32Array(Math.max(1, Math.floor(source.length / ratio)));
+    for (let index = 0; index < output.length; index += 1) {
+      const position = index * ratio;
+      const before = Math.floor(position);
+      const after = Math.min(source.length - 1, before + 1);
+      const fraction = position - before;
+      output[index] = source[before] * (1 - fraction) + source[after] * fraction;
+    }
+    return encodeMonoWav(output, targetRate);
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+async function requestCloudTranscription(wavBlob) {
+  if (!deviceAIConfig.apiKey) throw new Error("请先在设置中保存智谱 API Key。" );
+  const form = new FormData();
+  form.append("file", wavBlob, "mogu-voice-input.wav");
+  form.append("model", "glm-asr-2512");
+  form.append("stream", "false");
+  const response = await fetch(ZHIPU_ASR_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${deviceAIConfig.apiKey}` },
+    body: form
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if ([401, 403].includes(response.status)) throw new Error("智谱 API Key 无效或没有语音识别权限。" );
+    if (response.status === 429) throw new Error("智谱语音识别额度不足或请求过多。" );
+    throw new Error(data?.error?.message || `语音识别失败（${response.status}）。`);
+  }
+  const text = String(data?.text || "").trim();
+  if (!text) throw new Error("没有识别到清晰语音，请靠近麦克风再试。" );
+  return text;
+}
+
+async function finishCloudTextDictation(recorder, chunks, input, baseText, aborted) {
+  if (textDictation.mediaRecorder === recorder) textDictation.mediaRecorder = null;
+  const stream = textDictation.mediaStream;
+  textDictation.mediaStream = null;
+  stream?.getTracks().forEach((track) => track.stop());
+  textDictation.listening = false;
+  textDictation.mode = null;
+  if (aborted) {
+    textDictation.processing = false;
+    renderTextDictation();
+    return;
+  }
+  textDictation.processing = true;
+  textDictation.statusMessage = "";
+  renderTextDictation();
+  try {
+    const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    const wav = await convertRecordingToWav(recorded);
+    const spoken = await requestCloudTranscription(wav);
+    input.value = joinDictationText(baseText, spoken);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    textDictation.statusMessage = `已识别：${spoken}`;
+  } catch (error) {
+    textDictation.statusMessage = error.message || "语音识别失败，请重试。";
+    toast("语音输入没有成功", textDictation.statusMessage);
+  } finally {
+    textDictation.processing = false;
+    renderTextDictation();
+  }
+}
+
+async function startCloudTextDictation() {
+  if (!deviceAIConfig.apiKey) return toast("需要智谱 API Key", "请先在设置的“手机 AI 直连”中保存密钥。" );
+  if (!navigator.mediaDevices?.getUserMedia || !("MediaRecorder" in window)) {
+    return toast("当前浏览器不支持录音", "请使用最新版 Chrome，并确认网页使用 HTTPS。" );
+  }
+  const input = $("#aiInput");
+  textDictation.statusMessage = "正在请求麦克风权限…";
+  textDictation.starting = true;
+  renderTextDictation();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks = [];
+    const baseText = input.value.trim();
+    textDictation.mediaRecorder = recorder;
+    textDictation.mediaStream = stream;
+    textDictation.mediaChunks = chunks;
+    textDictation.abortRecording = false;
+    textDictation.starting = false;
+    textDictation.listening = true;
+    textDictation.mode = "cloud";
+    textDictation.statusMessage = "";
+    recorder.addEventListener("dataavailable", (event) => { if (event.data?.size) chunks.push(event.data); });
+    recorder.addEventListener("stop", () => {
+      const aborted = textDictation.abortRecording;
+      textDictation.abortRecording = false;
+      void finishCloudTextDictation(recorder, chunks, input, baseText, aborted);
+    }, { once: true });
+    recorder.start(250);
+    textDictation.stopTimer = window.setTimeout(() => stopTextDictation(false), 20000);
+    renderTextDictation();
+  } catch (error) {
+    textDictation.starting = false;
+    textDictation.listening = false;
+    textDictation.mode = null;
+    textDictation.statusMessage = error?.name === "NotAllowedError"
+      ? "没有获得麦克风权限，请在浏览器网站设置中允许麦克风。"
+      : error.message || "无法启动录音。";
+    renderTextDictation();
+    toast("无法开始语音输入", textDictation.statusMessage);
+  }
+}
+
 function startTextDictation() {
   if (aiPending) return;
+  if (deviceAIConfig.speechInput === "glm-asr" && deviceAIConfig.apiKey) {
+    void startCloudTextDictation();
+    return;
+  }
   const Recognition = speechRecognitionConstructor();
-  if (!Recognition) return toast("当前浏览器不支持语音输入", "请使用最新版 Chrome 或 Edge，也可以继续键盘输入。" );
+  if (!Recognition) {
+    textDictation.statusMessage = "当前浏览器不支持免费识别；请在设置中改用“智谱云识别”。";
+    renderTextDictation();
+    return toast("当前浏览器不支持语音输入", textDictation.statusMessage);
+  }
 
   const input = $("#aiInput");
   const recognition = new Recognition();
   textDictation.recognition = recognition;
   textDictation.listening = true;
+  textDictation.mode = "browser";
+  textDictation.statusMessage = "";
   textDictation.baseText = input.value.trim();
   textDictation.finalText = "";
   recognition.lang = state.settings.accent || "en-US";
@@ -1909,19 +2114,25 @@ function startTextDictation() {
   recognition.addEventListener("error", (event) => {
     if (textDictation.recognition !== recognition || event.error === "aborted") return;
     if (event.error === "not-allowed" || event.error === "service-not-allowed") {
-      toast("没有获得麦克风权限", "请在浏览器地址栏旁允许麦克风，然后重新点击语音输入。" );
+      textDictation.statusMessage = "没有获得麦克风权限，请在浏览器网站设置中允许麦克风。";
+      toast("没有获得麦克风权限", textDictation.statusMessage);
     } else if (event.error === "no-speech") {
-      toast("没有听清", "请靠近麦克风后再试一次。" );
+      textDictation.statusMessage = "没有听清，请靠近麦克风后再试一次。";
+      toast("没有听清", textDictation.statusMessage);
     } else if (event.error === "network") {
-      toast("语音识别联网失败", "请检查网络，或用最新版 Chrome / Edge 打开本应用后重试。" );
+      textDictation.statusMessage = "浏览器识别联网失败；可在设置中改用“智谱云识别”。";
+      toast("语音识别联网失败", textDictation.statusMessage);
     } else {
-      toast("语音输入暂时不可用", `浏览器返回：${event.error || "unknown"}`);
+      textDictation.statusMessage = `语音输入暂时不可用：${event.error || "unknown"}`;
+      toast("语音输入暂时不可用", textDictation.statusMessage);
     }
+    renderTextDictation();
   });
   recognition.addEventListener("end", () => {
     if (textDictation.recognition !== recognition) return;
     textDictation.recognition = null;
     textDictation.listening = false;
+    textDictation.mode = null;
     renderTextDictation();
     input.focus();
   });
@@ -1931,6 +2142,8 @@ function startTextDictation() {
   } catch (error) {
     textDictation.recognition = null;
     textDictation.listening = false;
+    textDictation.mode = null;
+    textDictation.statusMessage = error.message || "无法启动语音输入。";
     renderTextDictation();
     toast("无法启动语音输入", error.message || "请重新点击语音输入。" );
   }
@@ -1947,21 +2160,107 @@ function renderAITextSpeechButtons() {
     button.classList.toggle("speaking", speaking);
     button.setAttribute("aria-pressed", String(speaking));
     button.setAttribute("aria-label", speaking ? "停止朗读这条 AI 回复" : "朗读这条 AI 回复");
-    button.textContent = speaking ? "■ 停止" : "▶ 朗读";
+    button.textContent = speaking
+      ? aiTextSpeech.loading ? "… 生成语音" : "■ 停止"
+      : naturalSpeechEnabled() ? "▶ 自然朗读" : "▶ 朗读";
   });
 }
 
 function stopAITextSpeech(shouldRender = true) {
   if ("speechSynthesis" in window && aiTextSpeech.utterance) speechSynthesis.cancel();
-  aiTextSpeech = { utterance: null, messageIndex: null };
+  if (aiTextSpeech.audio) {
+    aiTextSpeech.audio.pause();
+    aiTextSpeech.audio.src = "";
+  }
+  if (aiTextSpeech.objectUrl) URL.revokeObjectURL(aiTextSpeech.objectUrl);
+  aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: false, messageIndex: null };
   if (shouldRender) renderAITextSpeechButtons();
 }
 
-function toggleAITextSpeech(messageIndex) {
+function naturalSpeechEnabled() {
+  return Boolean(deviceAIConfig.apiKey && deviceAIConfig.speechVoice && deviceAIConfig.speechVoice !== "system");
+}
+
+function wrapPcm16AsWav(base64, sampleRate = 44100) {
+  const binary = atob(base64);
+  const buffer = new ArrayBuffer(44 + binary.length);
+  const view = new DataView(buffer);
+  const writeAscii = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+  };
+  writeAscii(0, "RIFF");
+  view.setUint32(4, 36 + binary.length, true);
+  writeAscii(8, "WAVE");
+  writeAscii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, "data");
+  view.setUint32(40, binary.length, true);
+  for (let index = 0; index < binary.length; index += 1) view.setUint8(44 + index, binary.charCodeAt(index));
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+async function requestNaturalSpeech(text) {
+  if (!naturalSpeechEnabled()) throw new Error("自然朗读尚未启用。" );
+  const accent = state.settings.accent === "en-GB" ? "British" : "American";
+  const content = String(text || "").trim().slice(0, 900);
+  const response = await fetch(ZHIPU_CHAT_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${deviceAIConfig.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "glm-4-voice",
+      messages: [{
+        role: "user",
+        content: [{
+          type: "text",
+          text: `Read only the following text in a natural, warm and clear ${accent} English tutor voice. Use a learner-friendly pace and add no commentary:\n${content}`
+        }]
+      }],
+      stream: false
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if ([401, 403].includes(response.status)) throw new Error("智谱 API Key 无效或没有自然朗读权限。" );
+    if (response.status === 429) throw new Error("智谱自然朗读额度不足或请求过多。" );
+    throw new Error(data?.error?.message || `自然朗读生成失败（${response.status}）。`);
+  }
+  const audioBase64 = String(data?.choices?.[0]?.message?.audio?.data || "");
+  if (!audioBase64) throw new Error("智谱没有返回有效音频。" );
+  return wrapPcm16AsWav(audioBase64);
+}
+
+function speakTextWithSystem(text, messageIndex) {
+  if (!("speechSynthesis" in window)) return toast("当前浏览器不支持朗读", "请使用最新版 Chrome 或 Edge。" );
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = state.settings.accent || "en-US";
+  utterance.rate = 0.88;
+  const selected = speechSynthesis.getVoices().find((voice) => voice.voiceURI === state.settings.voiceURI);
+  if (selected) utterance.voice = selected;
+  aiTextSpeech = { utterance, audio: null, objectUrl: null, loading: false, messageIndex };
+  const finish = () => {
+    if (aiTextSpeech.utterance !== utterance) return;
+    aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: false, messageIndex: null };
+    renderAITextSpeechButtons();
+  };
+  utterance.addEventListener("end", finish, { once: true });
+  utterance.addEventListener("error", finish, { once: true });
+  renderAITextSpeechButtons();
+  speechSynthesis.speak(utterance);
+}
+
+async function toggleAITextSpeech(messageIndex) {
   const messages = currentAISession();
   const message = messages[messageIndex];
   if (!message || message.role !== "assistant" || !message.content) return;
-  if (!("speechSynthesis" in window)) return toast("当前浏览器不支持朗读", "请使用最新版 Chrome 或 Edge。" );
   if (aiTextSpeech.messageIndex === messageIndex) {
     stopAITextSpeech();
     return;
@@ -1969,21 +2268,34 @@ function toggleAITextSpeech(messageIndex) {
   if (textDictation.listening) stopTextDictation(true);
   stopPronunciationAudio();
   stopAITextSpeech(false);
-  const utterance = new SpeechSynthesisUtterance(message.content);
-  utterance.lang = state.settings.accent || "en-US";
-  utterance.rate = 0.88;
-  const selected = speechSynthesis.getVoices().find((voice) => voice.voiceURI === state.settings.voiceURI);
-  if (selected) utterance.voice = selected;
-  aiTextSpeech = { utterance, messageIndex };
-  const finish = () => {
-    if (aiTextSpeech.utterance !== utterance) return;
-    aiTextSpeech = { utterance: null, messageIndex: null };
-    renderAITextSpeechButtons();
-  };
-  utterance.addEventListener("end", finish, { once: true });
-  utterance.addEventListener("error", finish, { once: true });
+  if (!naturalSpeechEnabled()) {
+    speakTextWithSystem(message.content, messageIndex);
+    return;
+  }
+  aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: true, messageIndex };
   renderAITextSpeechButtons();
-  speechSynthesis.speak(utterance);
+  try {
+    const blob = await requestNaturalSpeech(message.content);
+    if (aiTextSpeech.messageIndex !== messageIndex) return;
+    const objectUrl = URL.createObjectURL(blob);
+    const audio = new Audio(objectUrl);
+    aiTextSpeech = { utterance: null, audio, objectUrl, loading: false, messageIndex };
+    const finish = () => {
+      if (aiTextSpeech.audio !== audio) return;
+      URL.revokeObjectURL(objectUrl);
+      aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: false, messageIndex: null };
+      renderAITextSpeechButtons();
+    };
+    audio.addEventListener("ended", finish, { once: true });
+    audio.addEventListener("error", finish, { once: true });
+    renderAITextSpeechButtons();
+    await audio.play();
+  } catch (error) {
+    if (aiTextSpeech.messageIndex !== messageIndex) return;
+    stopAITextSpeech();
+    toast("自然朗读暂时不可用", `${error.message || "生成失败"} 已切换到设备声音。`);
+    speakTextWithSystem(message.content, messageIndex);
+  }
 }
 
 function scheduleVoiceListening(delay = 450) {
@@ -2043,7 +2355,7 @@ function beginVoiceListening() {
   }
 }
 
-function speakVoiceReply(text) {
+function speakVoiceReplyWithSystem(text) {
   return new Promise((resolve) => {
     if (!("speechSynthesis" in window) || !text || !voiceSession.active) return resolve();
     speechSynthesis.cancel();
@@ -2066,6 +2378,46 @@ function speakVoiceReply(text) {
     utterance.addEventListener("error", finish, { once: true });
     speechSynthesis.speak(utterance);
   });
+}
+
+async function speakVoiceReply(text) {
+  if (!naturalSpeechEnabled()) return speakVoiceReplyWithSystem(text);
+  try {
+    const blob = await requestNaturalSpeech(text);
+    if (!voiceSession.active) return;
+    const objectUrl = URL.createObjectURL(blob);
+    const audio = new Audio(objectUrl);
+    voiceSession.audio = audio;
+    voiceSession.objectUrl = objectUrl;
+    voiceSession.state = "speaking";
+    renderVoiceUI();
+    await new Promise((resolve, reject) => {
+      const finish = () => {
+        if (voiceSession.audio === audio) {
+          voiceSession.audio = null;
+          voiceSession.objectUrl = null;
+        }
+        URL.revokeObjectURL(objectUrl);
+        resolve();
+      };
+      audio.addEventListener("ended", finish, { once: true });
+      audio.addEventListener("error", () => { finish(); reject(new Error("音频播放失败")); }, { once: true });
+      audio.play().catch(reject);
+    });
+  } catch (error) {
+    if (!voiceSession.active) return;
+    if (voiceSession.audio) {
+      voiceSession.audio.pause();
+      voiceSession.audio.src = "";
+      voiceSession.audio = null;
+    }
+    if (voiceSession.objectUrl) {
+      URL.revokeObjectURL(voiceSession.objectUrl);
+      voiceSession.objectUrl = null;
+    }
+    toast("自然朗读暂时不可用", `${error.message || "生成失败"} 已切换到设备声音。`);
+    await speakVoiceReplyWithSystem(text);
+  }
 }
 
 function buildTutorInstructions(scenario) {
@@ -2351,6 +2703,8 @@ function renderDeviceAISettings() {
   pill.dataset.state = configured ? "synced" : "unconfigured";
   $("span", pill).textContent = configured ? "此设备已保存" : "尚未配置";
   $("#deviceAIModelSelect").value = deviceAIConfig.model || DEFAULT_ZHIPU_MODEL;
+  $("#deviceAISpeechInputSelect").value = deviceAIConfig.speechInput || "glm-asr";
+  $("#deviceAIVoiceSelect").value = deviceAIConfig.speechVoice || "glm-4-voice";
   $("#deviceAIKeyInput").placeholder = configured ? "已保存；如不修改可留空" : "只保存在这台设备的浏览器中";
   $("#clearDeviceAI").disabled = !configured;
 }
@@ -2361,13 +2715,16 @@ async function configureDeviceAI() {
   if (apiKey.length < 20) return toast("请填写有效的 API Key", "从智谱开放平台复制完整密钥后再保存。" );
   deviceAIConfig = {
     apiKey,
-    model: $("#deviceAIModelSelect").value || DEFAULT_ZHIPU_MODEL
+    model: $("#deviceAIModelSelect").value || DEFAULT_ZHIPU_MODEL,
+    speechInput: $("#deviceAISpeechInputSelect").value || "glm-asr",
+    speechVoice: $("#deviceAIVoiceSelect").value || "glm-4-voice"
   };
   saveDeviceAIConfig();
   input.value = "";
   await checkAIStatus();
   renderSettings();
-  toast("手机 AI 已配置", "现在可以回到 AI 对话直接使用智谱。" );
+  renderAI();
+  toast("手机 AI 已配置", "语音输入与朗读设置已经生效。" );
 }
 
 async function clearDeviceAIConfig() {
@@ -2582,7 +2939,7 @@ function bindEvents() {
   $("#aiReset").addEventListener("click", resetAIConversation);
   $("#aiMessages").addEventListener("click", (event) => {
     const button = event.target.closest("[data-ai-speak-index]");
-    if (button) toggleAITextSpeech(Number(button.dataset.aiSpeakIndex));
+    if (button) void toggleAITextSpeech(Number(button.dataset.aiSpeakIndex));
   });
   $("#aiDictation").addEventListener("click", toggleTextDictation);
   $("#aiVoiceToggle").addEventListener("click", toggleVoiceConversation);
@@ -2734,7 +3091,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=32", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=33", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

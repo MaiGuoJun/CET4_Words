@@ -13,6 +13,7 @@
 - 三篇可离线使用的 VOA Learning English 精听材料；
 - 本地音频导入、原文显隐、变速和 A–B 循环；
 - 电脑使用智谱在线 AI + Ollama 本地备用，手机可从 GitHub Pages 直连智谱，支持情景对话、回复朗读、语法纠错、四级词汇提示和语音练习；
+- 手机文字对话支持 GLM-ASR 云端语音输入，AI 回复可用 GLM-4-Voice 真人感英语朗读；
 - 15 + 15 分钟专注计时、考试倒计时和 7 天统计；
 - Cloudflare Workers + D1 跨设备自动同步，并保留 JSON 学习记录备份与恢复；
 - Android Chrome 和 Windows Chrome/Edge 可安装使用。
@@ -43,6 +44,8 @@ ZHIPU_MODEL=glm-5.3-flash
 电脑端密钥只应保存在 `.env.local`，不要写入 `dist` 或提交到 Git。未配置智谱或智谱暂时不可用时，服务会自动使用下面的 Ollama 备用模型。
 
 手机打开 GitHub Pages 后，可进入 **设置 → 手机 AI 直连**，把同一个智谱 API Key 保存到手机浏览器。它只存在该设备的浏览器存储中，不进入学习记录、Cloudflare 同步、JSON 备份或 GitHub；手机会直接连接智谱，因此电脑关机也能使用 AI。请只在自己的设备上保存密钥，设备丢失或转交他人前先移除。
+
+同一设置区还可选择语音方式：`智谱云识别` 会录制最长 20 秒的单句，识别完成后只把文字填入输入框；`GLM-4-Voice` 使用通用 Token 包生成真人感英语朗读。官方价格中 GLM-ASR 约为 0.0002 元/秒，GLM-4-Voice 为 80 元/百万 Tokens；两项都可以切回免费的浏览器识别和设备系统声音。
 
 1. 安装 [Ollama for Windows](https://ollama.com/download/windows)；
 2. 在 PowerShell 中运行 `ollama pull qwen3.5:2b` 下载模型；
