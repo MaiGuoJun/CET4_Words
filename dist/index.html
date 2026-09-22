@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=27" />
+    <link rel="stylesheet" href="./styles.css?v=28" />
   </head>
   <body>
     <div class="app-shell">
@@ -142,8 +142,10 @@
 
             <div class="word-workspace" id="wordWorkspace">
               <div class="word-meta"><span id="wordLevel" class="word-level">四级</span><span id="wordRank">词频 #—</span><span id="wordStatus">未分类</span></div>
-              <button class="speak-button" type="button" id="speakWord" aria-label="播放真人单词发音">▶ 真人发音</button>
-              <audio class="pronunciation-player" id="wordPronunciationPlayer" controls controlslist="nodownload noplaybackrate" preload="auto" aria-label="真人单词发音" hidden></audio>
+              <div class="pronunciation-control">
+                <button class="speak-button" type="button" id="speakWord" aria-label="播放真人单词发音">▶ 真人发音</button>
+                <audio class="pronunciation-player" id="wordPronunciationPlayer" controls controlslist="nodownload noplaybackrate" preload="auto" aria-label="真人单词发音" hidden></audio>
+              </div>
               <h2 class="word" id="wordText">loading</h2>
               <p class="phonetic" id="wordPhonetic"></p>
               <p class="pronunciation-source" id="pronunciationSource" aria-live="polite" hidden></p>
@@ -358,6 +360,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=27" defer></script>
+    <script src="./app.js?v=28" defer></script>
   </body>
 </html>

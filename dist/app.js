@@ -79,6 +79,7 @@ let currentView = "today";
 let studyMode = "screen";
 let currentWordIndex = 0;
 let currentWord = null;
+let stableStudyHeight = 0;
 let quizQueue = [];
 let currentQuiz = null;
 let currentTrack = null;
@@ -454,6 +455,8 @@ function openStudy(mode) {
     button.setAttribute("aria-selected", button.dataset.studyMode === mode ? "true" : "false");
   });
   currentWordIndex = 0;
+  stableStudyHeight = 0;
+  $("#wordWorkspace").style.removeProperty("min-height");
   if (mode === "quiz") prepareQuiz();
   else renderCurrentWord();
   $("#studyPanel").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -521,6 +524,12 @@ function renderWordPhrases(word) {
   `).join("");
 }
 
+function stabilizeStudyWorkspace() {
+  const workspace = $("#wordWorkspace");
+  stableStudyHeight = Math.max(stableStudyHeight, Math.ceil(workspace.getBoundingClientRect().height));
+  workspace.style.minHeight = `${stableStudyHeight}px`;
+}
+
 function renderCurrentWord() {
   stopPronunciationAudio();
   resetNativePronunciationPlayer();
@@ -577,6 +586,7 @@ function revealCurrentWord() {
   $("#revealWord").hidden = true;
   replayMotion($("#wordReveal"), "reveal-enter");
   replayMotion($("#ratingActions"), "reveal-enter");
+  stabilizeStudyWorkspace();
 }
 
 function rateCurrentWord(rating) {
@@ -1007,9 +1017,13 @@ function renderPronunciationSource(clip) {
   if (!container) return;
   container.replaceChildren();
   if (!clip) {
-    container.hidden = true;
+    container.hidden = false;
+    container.classList.add("empty");
+    container.setAttribute("aria-hidden", "true");
     return;
   }
+  container.classList.remove("empty");
+  container.removeAttribute("aria-hidden");
   const label = document.createElement("span");
   const accent = clip.accent === "en-US" ? "美音" : clip.accent === "en-GB" ? "英音" : "";
   label.textContent = clip.fallback ? "设备备用发音" : `真人录音${accent ? ` · ${accent}` : ""}`;
@@ -2285,7 +2299,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=27", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=28", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
