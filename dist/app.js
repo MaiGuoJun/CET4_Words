@@ -7,6 +7,10 @@ const STABLE_LOCAL_ORIGIN = "http://127.0.0.1:4174";
 const WORD_PHASE_SECONDS = 15 * 60;
 const LISTEN_PHASE_SECONDS = 15 * 60;
 const EXAM_DEFAULT = "2026-12-12";
+const SYNC_CONFIG_KEY = "mogu-cet4-sync-config-v1";
+const SYNC_DEVICE_KEY = "mogu-cet4-sync-device-v1";
+const SYNC_POLL_MS = 45 * 1000;
+const DEFAULT_SYNC_ENDPOINT = "https://mogu-cet4-sync.wb408study.workers.dev";
 
 const fallbackWords = [
   { word: "access", phonetic: "ˈækses", partOfSpeech: "n. / v.", translation: "进入、存取", frequency: 86, phrase: "have access to", phraseMeaning: "有权使用；可以接近" },
@@ -111,6 +115,17 @@ let textDictation = {
   baseText: "",
   finalText: ""
 };
+let syncConfig = loadSyncConfig();
+let cloudSync = {
+  status: syncConfig.endpoint && syncConfig.token ? "connecting" : "unconfigured",
+  detail: syncConfig.endpoint && syncConfig.token ? "等待连接 Cloudflare" : "填写地址和密码后连接",
+  revision: 0,
+  ready: false,
+  busy: false,
+  timer: null,
+  pollTimer: null,
+  lastSyncedAt: syncConfig.lastSyncedAt || null
+};
 let timer = {
   phase: "word",
   duration: WORD_PHASE_SECONDS,
@@ -124,32 +139,235 @@ let timer = {
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
+function normalizeState(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return defaultState();
+  const base = defaultState();
+  return {
+    ...base,
+    ...parsed,
+    settings: { ...base.settings, ...(parsed.settings || {}) },
+    wordStates: parsed.wordStates && typeof parsed.wordStates === "object" ? parsed.wordStates : {},
+    daily: parsed.daily && typeof parsed.daily === "object" ? parsed.daily : {},
+    completedListening: Array.isArray(parsed.completedListening) ? parsed.completedListening : [],
+    ai: {
+      ...base.ai,
+      ...(parsed.ai || {}),
+      sessions: { ...(parsed.ai?.sessions || {}) }
+    }
+  };
+}
+
 function loadState() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (!parsed || typeof parsed !== "object") return defaultState();
-    const base = defaultState();
-    return {
-      ...base,
-      ...parsed,
-      settings: { ...base.settings, ...(parsed.settings || {}) },
-      wordStates: parsed.wordStates || {},
-      daily: parsed.daily || {},
-      completedListening: parsed.completedListening || [],
-      ai: {
-        ...base.ai,
-        ...(parsed.ai || {}),
-        sessions: { ...(parsed.ai?.sessions || {}) }
-      }
-    };
+    return normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY)));
   } catch {
     return defaultState();
   }
 }
 
+function loadSyncConfig() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SYNC_CONFIG_KEY));
+    return {
+      endpoint: String(parsed?.endpoint || DEFAULT_SYNC_ENDPOINT).replace(/\/+$/, ""),
+      token: String(parsed?.token || ""),
+      lastSyncedAt: parsed?.lastSyncedAt || null
+    };
+  } catch {
+    return { endpoint: DEFAULT_SYNC_ENDPOINT, token: "", lastSyncedAt: null };
+  }
+}
+
+function saveSyncConfig() {
+  localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(syncConfig));
+}
+
+function syncDeviceId() {
+  let value = localStorage.getItem(SYNC_DEVICE_KEY);
+  if (value) return value;
+  value = globalThis.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  localStorage.setItem(SYNC_DEVICE_KEY, value);
+  return value;
+}
+
+function persistState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
 function saveState() {
   state.updatedAt = new Date().toISOString();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  persistState();
+  scheduleCloudSync();
+}
+
+function normalizeSyncEndpoint(value) {
+  let endpoint = String(value || "").trim().replace(/\/+$/, "");
+  if (endpoint.endsWith("/sync")) endpoint = endpoint.slice(0, -5);
+  const url = new URL(endpoint);
+  const local = ["127.0.0.1", "localhost"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(local && url.protocol === "http:")) throw new Error("同步地址必须使用 HTTPS");
+  return endpoint;
+}
+
+function itemTimestamp(item) {
+  return Math.max(...[item?.lastReviewedAt, item?.learnedAt, item?.screenedAt, item?.completedAt]
+    .map((value) => Date.parse(value || "") || 0));
+}
+
+function stateTimestamp(value) {
+  return Date.parse(value?.updatedAt || value?.createdAt || "") || 0;
+}
+
+function mergeCloudStates(localState, remoteState) {
+  const local = normalizeState(localState);
+  const remote = normalizeState(remoteState);
+  const localNewer = stateTimestamp(local) >= stateTimestamp(remote);
+  const primary = localNewer ? local : remote;
+  const secondary = localNewer ? remote : local;
+  const wordStates = {};
+  for (const word of new Set([...Object.keys(remote.wordStates), ...Object.keys(local.wordStates)])) {
+    const localItem = local.wordStates[word];
+    const remoteItem = remote.wordStates[word];
+    if (!localItem) wordStates[word] = remoteItem;
+    else if (!remoteItem) wordStates[word] = localItem;
+    else wordStates[word] = itemTimestamp(localItem) >= itemTimestamp(remoteItem) ? localItem : remoteItem;
+  }
+
+  const daily = {};
+  for (const date of new Set([...Object.keys(remote.daily), ...Object.keys(local.daily)])) {
+    const left = remote.daily[date] || {};
+    const right = local.daily[date] || {};
+    daily[date] = { ...left, ...right };
+    for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+      if (typeof left[key] === "number" || typeof right[key] === "number") daily[date][key] = Math.max(Number(left[key]) || 0, Number(right[key]) || 0);
+    }
+  }
+
+  const listening = new Map();
+  [...remote.completedListening, ...local.completedListening].forEach((entry) => {
+    if (!entry?.trackId) return;
+    const key = `${entry.trackId}:${entry.date || ""}`;
+    const previous = listening.get(key);
+    if (!previous || itemTimestamp(entry) >= itemTimestamp(previous)) listening.set(key, entry);
+  });
+
+  const createdTimes = [local.createdAt, remote.createdAt].filter(Boolean).sort();
+  const backupTimes = [local.lastBackupAt, remote.lastBackupAt].filter(Boolean).sort();
+  const updatedTimes = [local.updatedAt, remote.updatedAt].filter(Boolean).sort();
+  return normalizeState({
+    ...secondary,
+    ...primary,
+    settings: primary.settings,
+    wordStates,
+    daily,
+    completedListening: [...listening.values()],
+    ai: primary.ai,
+    createdAt: createdTimes[0] || new Date().toISOString(),
+    lastBackupAt: backupTimes.at(-1) || null,
+    updatedAt: updatedTimes.at(-1) || new Date().toISOString()
+  });
+}
+
+function scheduleCloudSync(delay = 1200) {
+  if (!cloudSync.ready || !syncConfig.endpoint || !syncConfig.token) return;
+  clearTimeout(cloudSync.timer);
+  cloudSync.timer = window.setTimeout(() => { void syncNow(); }, delay);
+}
+
+async function cloudSyncRequest(method, payload) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(`${syncConfig.endpoint}/sync`, {
+      method,
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${syncConfig.token}`,
+        ...(payload ? { "Content-Type": "application/json" } : {})
+      },
+      body: payload ? JSON.stringify(payload) : undefined
+    });
+    let data = {};
+    try { data = await response.json(); } catch {}
+    return { response, data };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function setSyncStatus(status, detail) {
+  cloudSync.status = status;
+  cloudSync.detail = detail;
+  renderSyncStatus();
+}
+
+async function syncNow({ notify = false } = {}) {
+  if (cloudSync.busy) return;
+  if (!syncConfig.endpoint || !syncConfig.token) {
+    setSyncStatus("unconfigured", "填写地址和密码后连接");
+    return;
+  }
+  cloudSync.busy = true;
+  setSyncStatus("syncing", "正在与 Cloudflare 合并学习记录…");
+  try {
+    let { response, data: remote } = await cloudSyncRequest("GET");
+    if (response.status === 401) throw new Error("同步密码不正确");
+    if (!response.ok) throw new Error(remote.error || `同步服务返回 ${response.status}`);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      cloudSync.revision = Number(remote.revision) || 0;
+      const merged = remote.state ? mergeCloudStates(state, remote.state) : normalizeState(state);
+      const localChanged = JSON.stringify(merged) !== JSON.stringify(state);
+      const remoteChanged = !remote.state || JSON.stringify(merged) !== JSON.stringify(normalizeState(remote.state));
+      state = merged;
+      persistState();
+      if (localChanged) {
+        applyTheme();
+        renderAll();
+      }
+      if (!remoteChanged) break;
+
+      const result = await cloudSyncRequest("PUT", { baseRevision: cloudSync.revision, deviceId: syncDeviceId(), state });
+      if (result.response.status === 409 && attempt === 0) {
+        remote = result.data;
+        continue;
+      }
+      if (result.response.status === 401) throw new Error("同步密码不正确");
+      if (!result.response.ok) throw new Error(result.data.error || `同步服务返回 ${result.response.status}`);
+      remote = result.data;
+      cloudSync.revision = Number(remote.revision) || cloudSync.revision;
+      if (remote.state) {
+        state = mergeCloudStates(state, remote.state);
+        persistState();
+      }
+      break;
+    }
+
+    cloudSync.lastSyncedAt = new Date().toISOString();
+    syncConfig.lastSyncedAt = cloudSync.lastSyncedAt;
+    saveSyncConfig();
+    setSyncStatus("synced", `云端版本 ${cloudSync.revision} · 已自动同步`);
+    if (notify) toast("同步完成", "手机和电脑现在会自动合并学习进度。" );
+  } catch (error) {
+    const offline = !navigator.onLine || error?.name === "AbortError" || error instanceof TypeError;
+    setSyncStatus(offline ? "offline" : "error", offline ? "当前离线，记录已安全保存在本机" : (error.message || "同步失败，请稍后重试"));
+    if (notify) toast(offline ? "暂时无法连接云端" : "同步未完成", cloudSync.detail);
+  } finally {
+    cloudSync.busy = false;
+    renderSyncStatus();
+  }
+}
+
+async function initializeCloudSync() {
+  cloudSync.ready = true;
+  clearInterval(cloudSync.pollTimer);
+  cloudSync.pollTimer = window.setInterval(() => {
+    if (document.visibilityState === "visible") void syncNow();
+  }, SYNC_POLL_MS);
+  if (syncConfig.endpoint && syncConfig.token) await syncNow();
+  else renderSyncStatus();
 }
 
 function storageScopeInfo() {
@@ -157,14 +375,21 @@ function storageScopeInfo() {
   if (origin === STABLE_LOCAL_ORIGIN) {
     return {
       label: "本机固定入口 · 4174",
-      hint: "这是固定的本地开发地址。以后继续使用这个地址，就会读取同一份学习记录。",
+      hint: syncConfig.endpoint && syncConfig.token ? "本机 AI 可用；学习记录同时由 Cloudflare 自动同步。" : "这是固定的本地入口。连接 Cloudflare 后可与手机自动同步。",
+      warning: false
+    };
+  }
+  if (hostname.endsWith(".ts.net")) {
+    return {
+      label: "Tailscale 私人入口",
+      hint: "通过自己的电脑安全访问本地 AI；学习记录仍由 Cloudflare 自动同步。",
       warning: false
     };
   }
   if (hostname === "maiguojun.github.io") {
     return {
-      label: "GitHub Pages 线上存档",
-      hint: "线上网址拥有独立存档，与本机预览互不覆盖。重新发布到相同网址后仍会读取这份记录。",
+      label: "GitHub Pages 在线应用",
+      hint: syncConfig.endpoint && syncConfig.token ? "已连接 Cloudflare，手机和电脑会读取同一份学习记录。" : "连接 Cloudflare 后即可跨设备自动同步；本地 AI 需要使用私人电脑入口。",
       warning: false
     };
   }
@@ -2006,7 +2231,60 @@ function renderSettings() {
   $("#lastBackup").textContent = state.lastBackupAt ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(state.lastBackupAt)) : "从未备份";
   $("#restoreRecovery").hidden = !localStorage.getItem(`${STORAGE_KEY}-recovery`);
   renderStorageScope();
+  renderSyncStatus();
   renderVoices();
+}
+
+function renderSyncStatus() {
+  const pill = $("#syncStatus");
+  if (!pill) return;
+  const labels = {
+    unconfigured: "尚未配置",
+    connecting: "正在连接",
+    syncing: "正在同步",
+    synced: "已同步",
+    offline: "离线待同步",
+    error: "需要处理"
+  };
+  pill.dataset.state = cloudSync.status;
+  $("span", pill).textContent = labels[cloudSync.status] || labels.unconfigured;
+  $("#syncDetail").textContent = cloudSync.detail;
+  $("#syncLastTime").textContent = cloudSync.lastSyncedAt
+    ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(cloudSync.lastSyncedAt))
+    : "尚未同步";
+  if (document.activeElement !== $("#syncEndpointInput")) $("#syncEndpointInput").value = syncConfig.endpoint;
+  $("#syncTokenInput").placeholder = syncConfig.token ? "已保存；如不修改可留空" : "首次连接时输入；只保存在本设备";
+  $("#syncNow").disabled = cloudSync.busy || !syncConfig.endpoint || !syncConfig.token;
+  $("#connectSync").disabled = cloudSync.busy;
+  $("#disconnectSync").disabled = cloudSync.busy || !syncConfig.token;
+}
+
+async function connectCloudSync() {
+  try {
+    const endpoint = normalizeSyncEndpoint($("#syncEndpointInput").value || syncConfig.endpoint);
+    const token = $("#syncTokenInput").value || syncConfig.token;
+    if (!token || token.length < 8) throw new Error("同步密码至少需要 8 个字符");
+    syncConfig = { endpoint, token, lastSyncedAt: syncConfig.lastSyncedAt || null };
+    saveSyncConfig();
+    $("#syncTokenInput").value = "";
+    cloudSync.ready = true;
+    cloudSync.revision = 0;
+    await syncNow({ notify: true });
+  } catch (error) {
+    setSyncStatus("error", error.message || "同步配置不正确");
+    toast("无法连接同步", cloudSync.detail);
+  }
+}
+
+function disconnectCloudSync() {
+  if (!window.confirm("断开后不会删除本机或云端记录，但此设备将停止自动同步。确认断开吗？")) return;
+  clearTimeout(cloudSync.timer);
+  syncConfig = { endpoint: syncConfig.endpoint, token: "", lastSyncedAt: syncConfig.lastSyncedAt };
+  saveSyncConfig();
+  cloudSync.revision = 0;
+  setSyncStatus("unconfigured", "此设备已断开；本机记录保持不变");
+  renderStorageScope();
+  toast("已停止自动同步", "重新输入同步密码即可继续，不会丢失记录。" );
 }
 
 function exportData() {
@@ -2064,6 +2342,7 @@ function restoreRecovery() {
 }
 
 function checkBackupReminder() {
+  if (syncConfig.endpoint && syncConfig.token) return;
   if (!state.lastBackupAt) return toast("记得备份学习进度", "设置页可以导出 JSON；清理浏览器数据会删除本机记录。" );
   const elapsed = Date.now() - new Date(state.lastBackupAt).getTime();
   if (elapsed > 7 * 86400000) toast("距离上次备份已超过7天", "完成今天学习后，记得在设置页导出一份备份。" );
@@ -2187,6 +2466,9 @@ function bindEvents() {
   $("#voiceSelect").addEventListener("change", (event) => { state.settings.voiceURI = event.target.value; saveState(); });
   $("#themeSelect").addEventListener("change", (event) => { state.settings.theme = event.target.value; saveState(); applyTheme(); });
   $("#themeQuick").addEventListener("click", () => { state.settings.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; saveState(); applyTheme(); renderSettings(); });
+  $("#connectSync").addEventListener("click", () => { void connectCloudSync(); });
+  $("#syncNow").addEventListener("click", () => { void syncNow({ notify: true }); });
+  $("#disconnectSync").addEventListener("click", disconnectCloudSync);
   $("#exportData").addEventListener("click", exportData);
   $("#importData").addEventListener("click", () => $("#importDataInput").click());
   $("#restoreRecovery").addEventListener("click", restoreRecovery);
@@ -2199,7 +2481,12 @@ function bindEvents() {
       rateCurrentWord({ "1": "unknown", "2": "fuzzy", "3": "known" }[event.key]);
     }
   });
-  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopAITextSpeech(false); stopTextDictation(true); stopVoiceImmediately(false); saveState(); });
+  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopAITextSpeech(false); stopTextDictation(true); stopVoiceImmediately(false); persistState(); });
+  window.addEventListener("online", () => scheduleCloudSync(100));
+  window.addEventListener("offline", () => setSyncStatus("offline", "当前离线，记录已安全保存在本机"));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") scheduleCloudSync(250);
+  });
   window.addEventListener("storage", (event) => {
     if (event.key !== STORAGE_KEY || !event.newValue) return;
     state = loadState();
@@ -2296,10 +2583,11 @@ async function init() {
   bindEvents();
   await loadContent();
   renderAll();
+  void initializeCloudSync();
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=28", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=29", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

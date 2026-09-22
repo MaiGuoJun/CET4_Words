@@ -14,10 +14,10 @@
 - 本地音频导入、原文显隐、变速和 A–B 循环；
 - Ollama 本地 AI 文字情景对话、回复可选朗读、重点语法纠错、四级词汇提示和免费语音练习；
 - 15 + 15 分钟专注计时、考试倒计时和 7 天统计；
-- JSON 学习记录备份与恢复；
+- Cloudflare Workers + D1 跨设备自动同步，并保留 JSON 学习记录备份与恢复；
 - Android Chrome 和 Windows Chrome/Edge 可安装使用。
 
-学习记录和 AI 对话历史默认只保存在当前浏览器。AI 回复由本机 Ollama 模型生成，不需要 OpenAI API Key，也不会产生 API 调用费用。
+学习记录和 AI 对话历史默认先保存在当前浏览器；配置 Cloudflare 同步后，会在手机和电脑间自动合并。AI 回复由本机 Ollama 模型生成，不需要 OpenAI API Key，也不会产生 API 调用费用。
 
 单词会优先播放在线词典提供的真人录音，并按设置选择美音或英音；没有对应录音、离线或播放失败时，自动改用设备系统声音。真人录音功能不需要 API Key，但使用时需要联网。
 
@@ -41,9 +41,38 @@ node server.mjs
 
 打开 **AI 对话 → 本地语音**，点击“开始语音练习”并允许麦克风即可。AI 回复由本机模型生成并由系统声音朗读；语音识别使用 Chrome/Edge 提供的浏览器能力，部分浏览器可能联网完成识别，但应用不会保存录音。
 
+## 手机与电脑自动同步
+
+应用采用两项互补的免费服务：
+
+- Cloudflare Workers + D1 保存学习记录。电脑关机后，手机仍能学习和同步；
+- Tailscale Serve 在电脑开机时提供私人入口，让手机安全使用电脑上的 Ollama AI 和真人发音代理。
+
+Cloudflare 是唯一的同步数据源，不会与 Tailscale 产生两份互相覆盖的云端记录。每台设备仍会保留本地副本，离线修改会在恢复网络后自动合并。同步密码仅保存在各设备浏览器中，不写入代码、Git 仓库或 JSON 备份。
+
+Cloudflare 部署文件位于 `cloudflare/`。首次部署步骤：
+
+```powershell
+cd cloudflare
+npx wrangler login
+npx wrangler d1 create mogu-cet4-sync
+```
+
+把命令返回的 `database_id` 填入 `cloudflare/wrangler.toml`，然后执行：
+
+```powershell
+npx wrangler d1 execute mogu-cet4-sync --remote --file schema.sql
+npx wrangler secret put SYNC_SECRET
+npx wrangler deploy
+```
+
+部署完成后，在应用设置页填写 Workers 地址和同一个同步密码。手机与电脑各连接一次即可。请使用至少 12 位且不与其他账号共用的密码。
+
+Tailscale 安装后，在电脑登录自己的账号，并在手机登录同一账号。保持 `node server.mjs` 与 Ollama 运行，然后执行 `tailscale serve --bg 4174`。手机打开 Tailscale 提供的 `https://*.ts.net` 地址即可使用本地 AI；电脑休眠或关机时，Cloudflare 同步和其余学习功能不受影响。
+
 ## 发布到 GitHub Pages
 
-仓库已包含手动运行的 GitHub Pages 工作流。目前线上站点保持关闭；准备公开后，可在 GitHub Actions 中手动运行部署流程。本地 AI 需要访问使用者电脑上的 Ollama，因此静态 GitHub Pages 不能直接提供该功能。
+仓库已包含 GitHub Pages 工作流，线上地址为 `https://maiguojun.github.io/CET4_Words/`。Pages 可使用 Cloudflare 同步；本地 AI 仍需要通过本机地址或 Tailscale 私人入口访问电脑上的 Ollama。
 
 ## 数据来源
 

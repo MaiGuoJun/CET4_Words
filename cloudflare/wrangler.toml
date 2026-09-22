@@ -1,0 +1,11 @@
+name = "mogu-cet4-sync"
+main = "src/worker.mjs"
+compatibility_date = "2026-09-01"
+
+[vars]
+ALLOWED_ORIGINS = "https://maiguojun.github.io,http://127.0.0.1:4174,http://localhost:4174"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mogu-cet4-sync"
+database_id = "4e9b0681-c067-46c5-b6f1-ba96a42efda3"

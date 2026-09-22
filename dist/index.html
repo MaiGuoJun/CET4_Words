@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=28" />
+    <link rel="stylesheet" href="./styles.css?v=29" />
   </head>
   <body>
     <div class="app-shell">
@@ -321,7 +321,24 @@
             </section>
 
             <section class="card settings-section wide">
-              <div><p class="card-kicker">DATA</p><h2>数据备份</h2><p class="section-copy">学习记录只保存在当前浏览器。建议每7天导出一次备份。</p></div>
+              <div class="card-title-row sync-title-row">
+                <div><p class="card-kicker">CLOUD SYNC</p><h2>设备自动同步</h2><p class="section-copy">Cloudflare 保存学习进度；电脑关机后，手机仍可继续学习并同步。</p></div>
+                <span class="sync-status-pill" id="syncStatus" data-state="unconfigured"><i aria-hidden="true"></i><span>尚未配置</span></span>
+              </div>
+              <div class="sync-config-grid">
+                <label class="field"><span>Cloudflare 同步地址</span><input id="syncEndpointInput" type="url" inputmode="url" autocomplete="url" placeholder="https://mogu-cet4-sync.你的账号.workers.dev"/></label>
+                <label class="field"><span>同步密码</span><input id="syncTokenInput" type="password" autocomplete="current-password" placeholder="首次连接时输入；只保存在本设备"/></label>
+              </div>
+              <div class="sync-summary" id="syncSummary" role="status">
+                <div><span>同步状态</span><strong id="syncDetail">填写地址和密码后连接</strong></div>
+                <div><span>上次同步</span><strong id="syncLastTime">尚未同步</strong></div>
+              </div>
+              <div class="data-actions sync-actions"><button class="button primary" type="button" id="connectSync">连接并同步</button><button class="button secondary" type="button" id="syncNow">立即同步</button><button class="button ghost" type="button" id="disconnectSync">断开连接</button></div>
+              <p class="sync-note">离线时会先保存在本机，恢复网络后自动合并。同步密码不会写入备份或上传到 GitHub。</p>
+            </section>
+
+            <section class="card settings-section wide">
+              <div><p class="card-kicker">BACKUP</p><h2>手动备份</h2><p class="section-copy">自动同步之外，仍建议偶尔导出 JSON 作为独立备份。</p></div>
               <div class="storage-scope" id="storageScope" role="status">
                 <div class="storage-scope-head"><span><i aria-hidden="true"></i>当前存档空间</span><strong id="storageOrigin">正在识别…</strong></div>
                 <p id="storageScopeHint">相同网址会读取同一份学习记录。</p>
@@ -360,6 +377,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=28" defer></script>
+    <script src="./app.js?v=29" defer></script>
   </body>
 </html>
