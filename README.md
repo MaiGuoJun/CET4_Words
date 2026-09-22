@@ -8,7 +8,8 @@
 - 首周快速筛查，重建已有词汇基础；
 - “认识 / 模糊 / 不认识”分级与透明复习日程；
 - 看词辨义、真人发音听音选词和短语填空；
-- 4,023 个去重后的四级词条、分词性考频星级释义，以及 147 条高频搭配；
+- 4,578 个去重后的主背词条：排除 569 个小学基础词与基础语法词后保留 3,454 个四级词，并按考试词频补充 1,124 个带标签的六级词；
+- 分词性考频星级释义，以及 130 条仍适用于主背词库的高频搭配；
 - 三篇可离线使用的 VOA Learning English 精听材料；
 - 本地音频导入、原文显隐、变速和 A–B 循环；
 - Ollama 本地 AI 文字情景对话、回复可选朗读、重点语法纠错、四级词汇提示和免费语音练习；
@@ -47,3 +48,5 @@ node server.mjs
 ## 数据来源
 
 内容许可和署名见 [DATA-LICENSES.md](./DATA-LICENSES.md)。应用代码采用 MIT License；词汇数据仍受各自的数据许可约束。
+
+重新构建词库时，将 CETVocabulary 的 `cet_full_list.json`、ECDICT 的 `ecdict.csv`，以及八册 `PEPXiaoXue3_1.json` 至 `PEPXiaoXue6_2.json` 放入 `CET_SOURCE_DIR`，再运行 `node scripts/build-data.mjs`。

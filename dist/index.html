@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=26" />
+    <link rel="stylesheet" href="./styles.css?v=27" />
   </head>
   <body>
     <div class="app-shell">
@@ -141,7 +141,7 @@
             </div>
 
             <div class="word-workspace" id="wordWorkspace">
-              <div class="word-meta"><span id="wordRank">词频 #—</span><span id="wordStatus">未分类</span></div>
+              <div class="word-meta"><span id="wordLevel" class="word-level">四级</span><span id="wordRank">词频 #—</span><span id="wordStatus">未分类</span></div>
               <button class="speak-button" type="button" id="speakWord" aria-label="播放真人单词发音">▶ 真人发音</button>
               <audio class="pronunciation-player" id="wordPronunciationPlayer" controls controlslist="nodownload noplaybackrate" preload="auto" aria-label="真人单词发音" hidden></audio>
               <h2 class="word" id="wordText">loading</h2>
@@ -331,8 +331,8 @@
 
             <section class="card settings-section wide about-section">
               <div><p class="card-kicker">ABOUT</p><h2>内容与许可</h2></div>
-              <p>四级范围与词频数据来自 CETVocabulary（CC BY-NC-SA 4.0），释义与音标补充来自 ECDICT（MIT）。内置听力来自 VOA Learning English 的公有领域原创材料。</p>
-              <div class="source-links"><a href="https://github.com/exam-data/CETVocabulary" target="_blank" rel="noreferrer">CETVocabulary ↗</a><a href="https://github.com/skywind3000/ECDICT" target="_blank" rel="noreferrer">ECDICT ↗</a><a href="https://learningenglish.voanews.com/p/6861.html" target="_blank" rel="noreferrer">VOA 使用说明 ↗</a></div>
+              <p>当前主背词库共 4,578 词：排除 569 个小学基础词与基础语法词后保留 3,454 个四级词，并按考试词频补充 1,124 个六级词。六级词会在学习卡片上明确标注。范围与词频来自 CETVocabulary，音标与释义补充来自 ECDICT。</p>
+              <div class="source-links"><a href="https://github.com/exam-data/CETVocabulary" target="_blank" rel="noreferrer">CETVocabulary ↗</a><a href="https://github.com/kajweb/dict" target="_blank" rel="noreferrer">小学词表来源 ↗</a><a href="https://github.com/skywind3000/ECDICT" target="_blank" rel="noreferrer">ECDICT ↗</a><a href="https://learningenglish.voanews.com/p/6861.html" target="_blank" rel="noreferrer">VOA 使用说明 ↗</a></div>
             </section>
           </div>
         </section>
@@ -358,6 +358,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=26" defer></script>
+    <script src="./app.js?v=27" defer></script>
   </body>
 </html>

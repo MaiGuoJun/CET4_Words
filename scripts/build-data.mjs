@@ -12,6 +12,19 @@ const sourceDir = process.env.CET_SOURCE_DIR
 const cetPath = path.join(sourceDir, "cet_full_list.json");
 const ecdictPath = path.join(sourceDir, "ecdict.csv");
 const outputPath = path.join(projectDir, "dist", "data", "words.json");
+const TARGET_WORD_COUNT = 4578;
+const PRIMARY_BOOK_PATTERN = /^PEPXiaoXue[3-6]_[12]\.json$/;
+const elementaryGrammarWords = new Set(`
+  the a an to of and or but if so as than
+  i you he she it we they me him her us them
+  my your his its our their mine yours hers ours theirs
+  this that these those who whom whose what which when where why how
+  be am is are was were been being have has had do does did
+  can could may might must shall should will would not no yes
+  in on at by for from with up down out here there now then
+  one two three four five six seven eight nine ten
+  all any some many much more most few little only very
+`.trim().split(/\s+/));
 
 const phraseRows = [
   ["ability", "have the ability to", "有能力做……"],
@@ -460,8 +473,39 @@ if (!fs.existsSync(cetPath) || !fs.existsSync(ecdictPath)) {
 
 const source = JSON.parse(fs.readFileSync(cetPath, "utf8"));
 const cetRows = source["四六级词汇词频排序表"];
-const cet4 = cetRows.filter((row) => !row["六级"]);
-const target = new Map(cet4.map((row) => [row["单词"].toLocaleLowerCase("en-US"), row]));
+const primaryBookFiles = fs.readdirSync(sourceDir).filter((file) => PRIMARY_BOOK_PATTERN.test(file)).sort();
+if (primaryBookFiles.length !== 8) {
+  throw new Error(`Expected 8 PEP primary-school word books in ${sourceDir}, found ${primaryBookFiles.length}`);
+}
+
+const primaryWords = new Set();
+for (const file of primaryBookFiles) {
+  const lines = fs.readFileSync(path.join(sourceDir, file), "utf8").split(/\r?\n/).filter(Boolean);
+  for (const line of lines) {
+    const word = String(JSON.parse(line).headWord || "").trim().toLocaleLowerCase("en-US");
+    if (/^[a-z]+(?:-[a-z]+)?$/.test(word)) primaryWords.add(word);
+  }
+}
+for (const word of elementaryGrammarWords) primaryWords.add(word);
+
+const uniqueRows = [];
+const sourceWords = new Set();
+for (const row of cetRows) {
+  const normalized = row["单词"].toLocaleLowerCase("en-US");
+  if (sourceWords.has(normalized)) continue;
+  sourceWords.add(normalized);
+  uniqueRows.push(row);
+}
+
+const excludedPrimary = uniqueRows.filter((row) => !row["六级"] && primaryWords.has(row["单词"].toLocaleLowerCase("en-US")));
+const cet4 = uniqueRows.filter((row) => !row["六级"] && !primaryWords.has(row["单词"].toLocaleLowerCase("en-US")));
+const cet6Candidates = uniqueRows.filter((row) => row["六级"] && !primaryWords.has(row["单词"].toLocaleLowerCase("en-US")));
+const cet6Needed = TARGET_WORD_COUNT - cet4.length;
+if (cet6Needed < 0 || cet6Needed > cet6Candidates.length) {
+  throw new Error(`Cannot build ${TARGET_WORD_COUNT} words from ${cet4.length} CET-4 and ${cet6Candidates.length} CET-6 candidates`);
+}
+const selectedRows = [...cet4, ...cet6Candidates.slice(0, cet6Needed)];
+const target = new Map(selectedRows.map((row) => [row["单词"].toLocaleLowerCase("en-US"), row]));
 const supplements = new Map();
 
 const stream = fs.createReadStream(ecdictPath, { encoding: "utf8" });
@@ -481,7 +525,7 @@ for await (const line of input) {
 }
 
 const seen = new Set();
-const output = cet4.filter((row) => {
+const output = selectedRows.filter((row) => {
   const normalized = row["单词"].toLocaleLowerCase("en-US");
   if (seen.has(normalized)) return false;
   seen.add(normalized);
@@ -497,6 +541,8 @@ const output = cet4.filter((row) => {
   const primaryPhrase = phraseList[0];
   return {
     word: row["单词"],
+    level: row["六级"] ? "CET6" : "CET4",
+    isCET6Supplement: Boolean(row["六级"]),
     phonetic: extra.phonetic || "",
     partOfSpeech: [...new Set(senses.map((sense) => sense.partOfSpeech))].join(" / "),
     translation: senses.map((sense) => sense.meaning).join("；"),
@@ -513,6 +559,10 @@ const output = cet4.filter((row) => {
 fs.writeFileSync(outputPath, `${JSON.stringify(output)}\n`, "utf8");
 console.log(JSON.stringify({
   total: output.length,
+  cet4: output.filter((item) => item.level === "CET4").length,
+  cet6Supplement: output.filter((item) => item.level === "CET6").length,
+  excludedPrimary: excludedPrimary.length,
+  primarySourceWords: primaryWords.size,
   supplemented: supplements.size,
   phraseWords: output.filter((item) => item.phrase).length,
   phraseEntries: output.reduce((total, item) => total + (item.phrases?.length || 0), 0),

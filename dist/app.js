@@ -241,7 +241,8 @@ function getWordState(word) {
 
 function stateCounts() {
   const counts = { known: 0, fuzzy: 0, unknown: 0, mastered: 0, screened: 0, unclassified: words.length };
-  Object.values(state.wordStates).forEach((item) => {
+  words.forEach((word) => {
+    const item = state.wordStates[word.word];
     if (!item || !item.status) return;
     counts.screened += 1;
     counts.unclassified = Math.max(0, counts.unclassified - 1);
@@ -312,7 +313,7 @@ function applyTheme() {
 
 async function loadContent() {
   const [wordResult, trackResult] = await Promise.allSettled([
-    fetch("./data/words.json?v=9").then((response) => {
+    fetch("./data/words.json?v=10").then((response) => {
       if (!response.ok) throw new Error("word data unavailable");
       return response.json();
     }),
@@ -483,7 +484,17 @@ function frequencyStars(value) {
     const className = score >= position ? "full" : score >= position - 0.5 ? "half" : "empty";
     return `<span class="frequency-star ${className}" aria-hidden="true">★</span>`;
   }).join("");
-  return `<span class="sense-stars" role="img" aria-label="四级考频 ${label} 星" title="四级考频 ${label} / 3 星">${stars}</span>`;
+  return `<span class="sense-stars" role="img" aria-label="考试常用度 ${label} 星" title="考试常用度 ${label} / 3 星">${stars}</span>`;
+}
+
+function renderWordLevel(word) {
+  const badge = $("#wordLevel");
+  if (!badge) return;
+  const isCET6 = Boolean(word?.isCET6Supplement || word?.level === "CET6");
+  badge.hidden = !word;
+  badge.textContent = isCET6 ? "六级补充" : "四级";
+  badge.classList.toggle("cet6", isCET6);
+  $("#meaningTitle").textContent = isCET6 ? "六级补充词义" : "四级考频义项";
 }
 
 function renderWordMeanings(word) {
@@ -521,6 +532,7 @@ function renderCurrentWord() {
   }
   currentWordIndex %= queue.length;
   currentWord = queue[currentWordIndex];
+  renderWordLevel(currentWord);
   setPronunciationButton("idle");
   const item = getWordState(currentWord);
   $("#wordText").textContent = currentWord.word;
@@ -544,6 +556,7 @@ function renderEmptyStudy() {
   resetNativePronunciationPlayer();
   renderPronunciationSource(null);
   currentWord = null;
+  renderWordLevel(null);
   $("#wordText").textContent = "完成";
   $("#wordPhonetic").textContent = "这一组已经没有待处理单词";
   $("#wordReveal").hidden = true;
@@ -630,6 +643,7 @@ function renderQuizQuestion() {
   }
   currentQuiz = quizQueue[currentWordIndex];
   currentWord = currentQuiz.word;
+  renderWordLevel(currentWord);
   setPronunciationButton("idle");
   const shuffledWords = shuffle(words.filter((word) => word.word !== currentWord.word));
   const otherWords = shuffledWords.slice(0, 3);
@@ -2271,7 +2285,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=26", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=27", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

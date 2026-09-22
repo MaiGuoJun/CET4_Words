@@ -3,9 +3,15 @@
 ## CETVocabulary
 
 - 来源：<https://github.com/exam-data/CETVocabulary>
-- 用途：四级词汇范围、试卷词频顺序、简明释义和分类。
+- 用途：四、六级词汇范围、试卷词频顺序、简明释义和分类。
 - 数据许可：Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International（CC BY-NC-SA 4.0）。
-- 本项目筛除源数据中标记为六级的词条，并转换为浏览器使用的 JSON。该派生数据仅用于非商业学习用途，继续以 CC BY-NC-SA 4.0 提供。
+- 本项目先排除与人教版小学英语词表重合的词目及少量基础语法词，再保留 3,454 个四级词，并按源数据考试词频选取 1,124 个六级补充词，合计 4,578 词。六级补充词在数据和界面中均有明确标签。该派生数据仅用于非商业学习用途，继续以 CC BY-NC-SA 4.0 提供。
+
+## 人教版小学英语词表索引
+
+- 来源：<https://github.com/kajweb/dict>
+- 用途：读取三至六年级上下册八份 PEP 词表中的 `headWord`，建立小学基础词排除集合。
+- 本项目不复制该仓库中的释义、例句或音频，只用词目做集合比对。原仓库说明数据抓取自有道背单词；若未来公开商业化，应重新审核该来源的授权链。
 
 ## ECDICT
 
@@ -29,7 +35,7 @@
 
 ## 高频短语
 
-`scripts/build-data.mjs` 中的 147 条高频搭配由本项目整理，可随应用代码按 MIT License 使用。
+`scripts/build-data.mjs` 中的高频搭配由本项目整理；排除小学基础词后，当前主背词库保留 130 条，可随应用代码按 MIT License 使用。
 
 ## 义项考频星级
 

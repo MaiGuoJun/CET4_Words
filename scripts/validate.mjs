@@ -23,13 +23,20 @@ if (missing.length) throw new Error(`Missing files: ${missing.join(", ")}`);
 
 const words = JSON.parse(fs.readFileSync(path.join(dist, "data", "words.json"), "utf8"));
 const wordNames = new Set(words.map((item) => item.word.toLocaleLowerCase("en-US")));
-if (words.length !== 4023) throw new Error(`Expected 4023 unique CET-4 words, found ${words.length}`);
+if (words.length !== 4578) throw new Error(`Expected 4578 unique study words, found ${words.length}`);
 if (wordNames.size !== words.length) throw new Error("Word list contains duplicates");
+const cet4Count = words.filter((item) => item.level === "CET4" && !item.isCET6Supplement).length;
+const cet6Count = words.filter((item) => item.level === "CET6" && item.isCET6Supplement).length;
+if (cet4Count + cet6Count !== words.length || !cet4Count || !cet6Count) throw new Error("Word level labels are incomplete");
+if (cet4Count !== 3454 || cet6Count !== 1124) throw new Error(`Unexpected level split: ${cet4Count} CET-4 / ${cet6Count} CET-6`);
+const excludedBasicSamples = ["the", "a", "to", "apple", "banana", "book", "cat", "dog", "job", "pencil", "red", "work"];
+const retainedBasic = excludedBasicSamples.filter((word) => wordNames.has(word));
+if (retainedBasic.length) throw new Error(`Basic primary words remain: ${retainedBasic.join(", ")}`);
 const phraseEntries = words.reduce((total, item) => total + (item.phrases?.length || 0), 0);
-if (phraseEntries < 140) throw new Error(`Expected at least 140 curated phrase entries, found ${phraseEntries}`);
+if (phraseEntries < 120) throw new Error(`Expected at least 120 curated phrase entries, found ${phraseEntries}`);
 if (words.filter((item) => item.phonetic).length < 3980) throw new Error("Too many words are missing phonetics");
 if (words.some((item) => !item.translation || !item.partOfSpeech || !Number.isFinite(item.rank))) throw new Error("Word data has missing required fields");
-if (words.filter((item) => item.senses?.length > 1).length < 500) throw new Error("Too few words have ranked multi-sense entries");
+if (words.filter((item) => item.senses?.length > 1).length < 450) throw new Error("Too few words have ranked multi-sense entries");
 for (const word of words) {
   if (!Array.isArray(word.senses) || !word.senses.length) throw new Error(`${word.word} has no ranked senses`);
   if (word.senses[0].stars !== 3) throw new Error(`${word.word} does not start with a three-star sense`);
@@ -62,6 +69,8 @@ if (manifest.display !== "standalone" || !manifest.icons?.length) throw new Erro
 console.log(JSON.stringify({
   files: required.length,
   words: words.length,
+  cet4: cet4Count,
+  cet6Supplement: cet6Count,
   phonetics: words.filter((item) => item.phonetic).length,
   phraseWords: words.filter((item) => item.phrase).length,
   phraseEntries,
