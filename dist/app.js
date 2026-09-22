@@ -86,8 +86,11 @@ let objectAudioUrl = null;
 let loopA = null;
 let loopB = null;
 const pronunciationCache = new Map();
+const pronunciationAssetCache = new Map();
 let pronunciationAudio = null;
 let pronunciationRequestId = 0;
+let pronunciationAudioContext = null;
+let pronunciationAudioSource = null;
 let aiPending = false;
 let aiServiceStatus = "checking";
 let aiTextSpeech = { utterance: null, messageIndex: null };
@@ -465,6 +468,7 @@ function currentStudyQueue() {
 
 function renderCurrentWord() {
   stopPronunciationAudio();
+  resetNativePronunciationPlayer();
   renderPronunciationSource(null);
   const queue = currentStudyQueue();
   if (!queue.length) {
@@ -491,11 +495,13 @@ function renderCurrentWord() {
   $("#phraseBox").hidden = !hasPhrase;
   $("#wordPhrase").textContent = currentWord.phrase || "";
   $("#phraseMeaning").textContent = currentWord.phraseMeaning || "";
+  void prepareCurrentPronunciation(currentWord.word);
   replayMotion($("#wordWorkspace"), "word-enter");
 }
 
 function renderEmptyStudy() {
   stopPronunciationAudio();
+  resetNativePronunciationPlayer();
   renderPronunciationSource(null);
   currentWord = null;
   $("#wordText").textContent = "完成";
@@ -562,7 +568,7 @@ function prepareQuiz() {
     type: word.phrase && index % 3 === 2 ? "phrase" : index % 3 === 1 ? "audio" : "meaning"
   }));
   quizQueue.filter((question) => question.type === "audio").forEach((question) => {
-    void getPronunciationClip(question.word.word);
+    void getPronunciationAsset(question.word.word);
   });
   currentWordIndex = 0;
   renderQuizQuestion();
@@ -570,6 +576,7 @@ function prepareQuiz() {
 
 function renderQuizQuestion() {
   stopPronunciationAudio();
+  resetNativePronunciationPlayer();
   renderPronunciationSource(null);
   if (!quizQueue.length || currentWordIndex >= quizQueue.length) {
     currentQuiz = null;
@@ -618,6 +625,7 @@ function renderQuizQuestion() {
     options = shuffle([currentWord, ...otherWords]).map((word) => ({ value: word.word, label: word.word }));
   }
   $("#quizOptions").innerHTML = options.map((option) => `<button class="quiz-option" type="button" data-answer="${escapeHtml(option.value)}">${escapeHtml(option.label)}</button>`).join("");
+  void prepareCurrentPronunciation(currentWord.word);
   replayMotion($("#wordWorkspace"), "word-enter");
 }
 
@@ -656,13 +664,13 @@ function normalizePronunciationUrl(value) {
   if (!value) return "";
   try {
     const url = new URL(String(value).startsWith("//") ? `https:${value}` : value, window.location.origin);
-    const allowedHost = url.origin === window.location.origin
-      || url.hostname === "api.dictionaryapi.dev"
+    const isSameOrigin = url.origin === window.location.origin;
+    const allowedRemoteHost = url.hostname === "api.dictionaryapi.dev"
       || url.hostname.endsWith(".dictionaryapi.dev")
       || url.hostname === "upload.wikimedia.org"
       || url.hostname.endsWith(".wikimedia.org")
       || url.hostname.endsWith(".wiktionary.org");
-    return url.protocol === "https:" && allowedHost ? url.href : "";
+    return isSameOrigin || (url.protocol === "https:" && allowedRemoteHost) ? url.href : "";
   } catch {
     return "";
   }
@@ -810,29 +818,131 @@ async function getPronunciationClip(text) {
   return clip;
 }
 
+function pronunciationCacheKey(text) {
+  return `${state.settings.accent || "en-US"}:${String(text || "").trim().toLowerCase()}`;
+}
+
+function preparedPronunciationAsset(text) {
+  const cached = pronunciationAssetCache.get(pronunciationCacheKey(text));
+  return cached && typeof cached.then !== "function" ? cached : null;
+}
+
+async function getPronunciationAsset(text) {
+  const key = pronunciationCacheKey(text);
+  const cached = pronunciationAssetCache.get(key);
+  if (cached) return cached;
+  const request = (async () => {
+    const clip = await getPronunciationClip(text);
+    if (!clip) return null;
+    const audio = new Audio(clip.audio);
+    audio.preload = "auto";
+    const ready = await new Promise((resolve) => {
+      if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return resolve(true);
+      const finish = (result) => {
+        window.clearTimeout(timeout);
+        audio.removeEventListener("canplay", onReady);
+        audio.removeEventListener("error", onError);
+        resolve(result);
+      };
+      const onReady = () => finish(true);
+      const onError = () => finish(false);
+      const timeout = window.setTimeout(() => finish(false), 12000);
+      audio.addEventListener("canplay", onReady, { once: true });
+      audio.addEventListener("error", onError, { once: true });
+      audio.load();
+    });
+    return ready ? { clip, audio } : null;
+  })();
+  pronunciationAssetCache.set(key, request);
+  const asset = await request;
+  if (asset) {
+    pronunciationAssetCache.set(key, asset);
+    while (pronunciationAssetCache.size > 24) pronunciationAssetCache.delete(pronunciationAssetCache.keys().next().value);
+  } else {
+    pronunciationAssetCache.delete(key);
+  }
+  return asset;
+}
+
+async function prepareCurrentPronunciation(text) {
+  if (!text || currentWord?.word !== text) return;
+  setPronunciationButton("preparing", text);
+  const clip = await getPronunciationClip(text);
+  if (currentWord?.word !== text || pronunciationAudio || pronunciationAudioSource) return;
+  if (clip) {
+    showNativePronunciationPlayer({ clip }, text);
+    void getPronunciationAsset(text);
+  } else {
+    setPronunciationButton("fallback", text);
+  }
+}
+
+function resetNativePronunciationPlayer() {
+  const player = $("#wordPronunciationPlayer");
+  const button = $("#speakWord");
+  if (!player || !button) return;
+  delete player.dataset.word;
+  player.pause();
+  player.removeAttribute("src");
+  player.load();
+  player.hidden = true;
+  button.hidden = false;
+}
+
+function showNativePronunciationPlayer(asset, text) {
+  if (!asset || currentWord?.word !== text) return;
+  const player = $("#wordPronunciationPlayer");
+  const button = $("#speakWord");
+  player.dataset.word = text;
+  player.src = asset.clip.audio;
+  player.hidden = false;
+  button.hidden = true;
+  player.load();
+  renderPronunciationSource(asset.clip);
+}
+
 function stopPronunciationAudio(invalidate = true) {
   if (invalidate) pronunciationRequestId += 1;
   if (pronunciationAudio) {
     pronunciationAudio.pause();
-    pronunciationAudio.removeAttribute("src");
-    pronunciationAudio.load();
+    try { pronunciationAudio.currentTime = 0; } catch {}
     pronunciationAudio = null;
   }
+  if (pronunciationAudioSource) {
+    try { pronunciationAudioSource.stop(); } catch {}
+    try { pronunciationAudioSource.disconnect(); } catch {}
+    pronunciationAudioSource = null;
+  }
   if ("speechSynthesis" in window) speechSynthesis.cancel();
+}
+
+function activatePronunciationAudio() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return null;
+  pronunciationAudioContext ||= new AudioContextClass();
+  const ready = pronunciationAudioContext.state === "suspended"
+    ? pronunciationAudioContext.resume().catch(() => {})
+    : Promise.resolve();
+  return { context: pronunciationAudioContext, ready };
 }
 
 function setPronunciationButton(status, text = currentWord?.word) {
   const button = $("#speakWord");
   if (!button) return;
   const matchesCurrentWord = Boolean(text && currentWord?.word === text);
-  button.disabled = !currentWord;
-  button.classList.toggle("loading", status === "loading" && matchesCurrentWord);
-  button.setAttribute("aria-busy", status === "loading" && matchesCurrentWord ? "true" : "false");
-  button.textContent = status === "loading" && matchesCurrentWord
-    ? "获取真人发音…"
-    : status === "playing" && matchesCurrentWord
-      ? "正在播放…"
-      : "▶ 真人发音";
+  const waiting = ["loading", "preparing"].includes(status) && matchesCurrentWord;
+  button.disabled = !currentWord || (status === "preparing" && matchesCurrentWord);
+  button.classList.toggle("loading", waiting);
+  button.setAttribute("aria-busy", waiting ? "true" : "false");
+  button.textContent = status === "preparing" && matchesCurrentWord
+    ? "准备真人发音…"
+    : status === "fallback" && matchesCurrentWord
+      ? "▶ 设备发音"
+    : status === "loading" && matchesCurrentWord
+      ? "获取真人发音…"
+      : status === "playing" && matchesCurrentWord
+        ? "正在播放…"
+        : "▶ 真人发音";
 }
 
 function renderPronunciationSource(clip) {
@@ -879,45 +989,97 @@ async function speak(text, { notifyFallback = false } = {}) {
   if (!text) return;
   stopPronunciationAudio(false);
   const requestId = ++pronunciationRequestId;
+  const prepared = preparedPronunciationAsset(text);
+  if (prepared) {
+    const { clip, audio } = prepared;
+    pronunciationAudio = audio;
+    audio.currentTime = 0;
+    let failed = false;
+    const fallback = (reason) => {
+      if (failed || requestId !== pronunciationRequestId) return;
+      failed = true;
+      if (pronunciationAudio === audio) pronunciationAudio = null;
+      renderPronunciationSource({ fallback: true });
+      setPronunciationButton("idle", text);
+      const spoke = speakWithSystemVoice(text);
+      if (notifyFallback) {
+        const detail = reason?.name === "NotAllowedError"
+          ? "浏览器阻止了音频播放，请在地址栏允许声音后重试。"
+          : spoke ? "已改用设备备用发音，请稍后再试。" : "请联网或更换浏览器后重试。";
+        toast(reason?.name === "NotAllowedError" ? "浏览器阻止了真人录音" : spoke ? "真人录音暂时无法播放" : "当前无法播放发音", detail);
+      }
+    };
+    audio.onended = () => {
+      if (pronunciationAudio === audio) pronunciationAudio = null;
+      if (requestId === pronunciationRequestId) setPronunciationButton("idle", text);
+    };
+    audio.onerror = () => fallback(audio.error);
+    const playback = audio.play();
+    renderPronunciationSource(clip);
+    setPronunciationButton("playing", text);
+    try {
+      await playback;
+    } catch (error) {
+      fallback(error);
+    }
+    return;
+  }
+  const webAudio = notifyFallback ? activatePronunciationAudio() : pronunciationAudioContext?.state === "running"
+    ? { context: pronunciationAudioContext, ready: Promise.resolve() }
+    : null;
   setPronunciationButton("loading", text);
   const clip = await getPronunciationClip(text);
   if (requestId !== pronunciationRequestId) return;
+
+  if (clip && webAudio) {
+    try {
+      await webAudio.ready;
+      if (webAudio.context.state !== "running") throw new Error("audio context unavailable");
+      const response = await fetch(clip.audio, { cache: "force-cache" });
+      if (!response.ok) throw new Error(`audio status ${response.status}`);
+      const buffer = await webAudio.context.decodeAudioData(await response.arrayBuffer());
+      if (requestId !== pronunciationRequestId) return;
+      const source = webAudio.context.createBufferSource();
+      source.buffer = buffer;
+      source.connect(webAudio.context.destination);
+      pronunciationAudioSource = source;
+      source.addEventListener("ended", () => {
+        if (pronunciationAudioSource === source) pronunciationAudioSource = null;
+        try { source.disconnect(); } catch {}
+        if (requestId === pronunciationRequestId) setPronunciationButton("idle", text);
+      }, { once: true });
+      source.start();
+      renderPronunciationSource(clip);
+      setPronunciationButton("playing", text);
+      return;
+    } catch {
+      if (requestId !== pronunciationRequestId) return;
+    }
+  }
 
   if (clip) {
     const audio = new Audio(clip.audio);
     pronunciationAudio = audio;
     audio.preload = "auto";
-    let hasFallenBack = false;
-    const fallback = () => {
-      if (hasFallenBack || requestId !== pronunciationRequestId) return;
-      hasFallenBack = true;
-      if (pronunciationAudio === audio) pronunciationAudio = null;
-      renderPronunciationSource({ fallback: true });
-      setPronunciationButton("idle", text);
-      const spoke = speakWithSystemVoice(text);
-      if (notifyFallback) toast(spoke ? "暂无可用的真人录音" : "真人录音播放失败", spoke ? "已改用设备备用发音。" : "请检查网络或更换浏览器后重试。");
-    };
     audio.addEventListener("ended", () => {
       if (pronunciationAudio === audio) pronunciationAudio = null;
       if (requestId === pronunciationRequestId) setPronunciationButton("idle", text);
     }, { once: true });
-    audio.addEventListener("error", fallback, { once: true });
     try {
       await audio.play();
-      if (requestId !== pronunciationRequestId || hasFallenBack) return;
+      if (requestId !== pronunciationRequestId) return;
       renderPronunciationSource(clip);
       setPronunciationButton("playing", text);
       return;
     } catch {
-      fallback();
-      return;
+      if (pronunciationAudio === audio) pronunciationAudio = null;
     }
   }
 
   renderPronunciationSource({ fallback: true });
   setPronunciationButton("idle", text);
   const spoke = speakWithSystemVoice(text);
-  if (notifyFallback) toast(spoke ? "这个词暂时没有真人录音" : "当前无法播放发音", spoke ? "已改用设备备用发音。" : "请联网或更换支持发音的浏览器后重试。");
+  if (notifyFallback) toast(spoke ? "真人录音暂时无法播放" : "当前无法播放发音", spoke ? "已改用设备备用发音，请稍后再试。" : "请联网或更换支持发音的浏览器后重试。");
 }
 
 function renderVoices() {
@@ -1853,6 +2015,30 @@ function bindEvents() {
   $$("[data-study-mode]").forEach((button) => button.addEventListener("click", () => openStudy(button.dataset.studyMode)));
   $("#revealWord").addEventListener("click", revealCurrentWord);
   $("#speakWord").addEventListener("click", () => { void speak(currentWord?.word, { notifyFallback: true }); });
+  const nativePronunciation = $("#wordPronunciationPlayer");
+  nativePronunciation.addEventListener("play", () => {
+    if ("speechSynthesis" in window) speechSynthesis.cancel();
+    if (pronunciationAudio && pronunciationAudio !== nativePronunciation) pronunciationAudio.pause();
+    if (pronunciationAudioSource) {
+      try { pronunciationAudioSource.stop(); } catch {}
+      try { pronunciationAudioSource.disconnect(); } catch {}
+      pronunciationAudioSource = null;
+    }
+    pronunciationAudio = nativePronunciation;
+  });
+  nativePronunciation.addEventListener("pause", () => {
+    if (pronunciationAudio === nativePronunciation) pronunciationAudio = null;
+  });
+  nativePronunciation.addEventListener("ended", () => {
+    if (pronunciationAudio === nativePronunciation) pronunciationAudio = null;
+  });
+  nativePronunciation.addEventListener("error", () => {
+    const word = nativePronunciation.dataset.word;
+    if (!word || currentWord?.word !== word) return;
+    resetNativePronunciationPlayer();
+    renderPronunciationSource({ fallback: true });
+    setPronunciationButton("fallback", word);
+  });
   $$("[data-rating]").forEach((button) => button.addEventListener("click", () => rateCurrentWord(button.dataset.rating)));
   $("#quizOptions").addEventListener("click", (event) => {
     const button = event.target.closest("[data-answer]");
@@ -1919,7 +2105,14 @@ function bindEvents() {
   $("#dailyTargetInput").addEventListener("change", (event) => setDailyTarget(event.target.value));
   $("#examDateInput").addEventListener("change", (event) => { state.settings.examDate = event.target.value || EXAM_DEFAULT; state.settings.targetIsManual = false; applyRecommendedTarget(); saveState(); renderAll(); });
   $("#scoreGoalInput").addEventListener("change", (event) => { state.settings.scoreGoal = Math.max(425, Math.min(710, Number(event.target.value) || 500)); saveState(); renderProgress(); });
-  $("#accentSelect").addEventListener("change", (event) => { state.settings.accent = event.target.value; stopPronunciationAudio(); renderPronunciationSource(null); saveState(); });
+  $("#accentSelect").addEventListener("change", (event) => {
+    state.settings.accent = event.target.value;
+    stopPronunciationAudio();
+    resetNativePronunciationPlayer();
+    renderPronunciationSource(null);
+    if (currentWord) void prepareCurrentPronunciation(currentWord.word);
+    saveState();
+  });
   $("#voiceSelect").addEventListener("change", (event) => { state.settings.voiceURI = event.target.value; saveState(); });
   $("#themeSelect").addEventListener("change", (event) => { state.settings.theme = event.target.value; saveState(); applyTheme(); });
   $("#themeQuick").addEventListener("click", () => { state.settings.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; saveState(); applyTheme(); renderSettings(); });
@@ -2035,7 +2228,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=17", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=25", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
