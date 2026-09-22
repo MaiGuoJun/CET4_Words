@@ -83,6 +83,7 @@ let currentView = "today";
 let studyMode = "screen";
 let currentWordIndex = 0;
 let currentWord = null;
+let studyQueue = [];
 let stableStudyHeight = 0;
 let quizQueue = [];
 let currentQuiz = null;
@@ -581,7 +582,7 @@ function dueWords() {
   const today = localDateKey();
   return words.filter((word) => {
     const item = getWordState(word);
-    return item?.due && item.due <= today;
+    return item?.learnedAt && item.due && item.due <= today;
   });
 }
 
@@ -592,7 +593,7 @@ function unscreenedWords() {
 function newLearningWords() {
   return words.filter((word) => {
     const item = getWordState(word);
-    return !item || ["unknown", "fuzzy"].includes(item.status);
+    return !item || (!item.learnedAt && ["unknown", "fuzzy"].includes(item.status));
   });
 }
 
@@ -614,7 +615,7 @@ function renderToday() {
   $("#dailyTargetInput").value = target;
   $("#targetReason").textContent = state.settings.targetIsManual ? "已手动调整（20–50）" : `按剩余词量推荐 ${recommendedDailyTarget()} 个`;
   $("#dueCount").textContent = `${due} 个`;
-  $("#newCount").textContent = `${record.learned} / ${target}`;
+  $("#newCount").textContent = record.learned > target ? `${target} / ${target} · 加练 ${record.learned - target}` : `${record.learned} / ${target}`;
   $("#quizCount").textContent = record.quizTotal ? `${record.quizCorrect} / ${record.quizTotal}` : "未开始";
   $("#listenCount").textContent = listened ? "已完成" : "未开始";
   $("#dailyOrbit").style.setProperty("--progress", `${percent}%`);
@@ -680,6 +681,7 @@ function openStudy(mode) {
     button.setAttribute("aria-selected", button.dataset.studyMode === mode ? "true" : "false");
   });
   currentWordIndex = 0;
+  studyQueue = createStudyQueue(mode);
   stableStudyHeight = 0;
   $("#wordWorkspace").style.removeProperty("min-height");
   if (mode === "quiz") prepareQuiz();
@@ -687,12 +689,14 @@ function openStudy(mode) {
   $("#studyPanel").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function currentStudyQueue() {
-  if (studyMode === "screen") return unscreenedWords().slice(0, 500);
+function createStudyQueue(mode = studyMode) {
+  if (mode === "screen") return unscreenedWords().slice(0, 500);
+  if (mode !== "learn") return [];
   const due = dueWords();
   const dueNames = new Set(due.map((word) => word.word));
   const fresh = newLearningWords().filter((word) => !dueNames.has(word.word));
-  return [...due, ...fresh].slice(0, Math.max(state.settings.dailyTarget + due.length, 1));
+  const remainingNewWords = Math.max(0, state.settings.dailyTarget - todayRecord().learned);
+  return [...due, ...fresh.slice(0, remainingNewWords)];
 }
 
 function wordSenseRows(word) {
@@ -759,13 +763,11 @@ function renderCurrentWord() {
   stopPronunciationAudio();
   resetNativePronunciationPlayer();
   renderPronunciationSource(null);
-  const queue = currentStudyQueue();
-  if (!queue.length) {
+  if (!studyQueue.length || currentWordIndex >= studyQueue.length) {
     renderEmptyStudy();
     return;
   }
-  currentWordIndex %= queue.length;
-  currentWord = queue[currentWordIndex];
+  currentWord = studyQueue[currentWordIndex];
   renderWordLevel(currentWord);
   setPronunciationButton("idle");
   const item = getWordState(currentWord);
@@ -774,7 +776,7 @@ function renderCurrentWord() {
   renderWordMeanings(currentWord);
   $("#wordRank").textContent = `词频 #${currentWord.rank || currentWord.frequency || "—"}`;
   $("#wordStatus").textContent = item ? ({ known: "认识", fuzzy: "模糊", unknown: "不认识" }[item.status] || "待复习") : "未分类";
-  $("#studyPosition").textContent = `${currentWordIndex + 1} / ${queue.length}`;
+  $("#studyPosition").textContent = `${currentWordIndex + 1} / ${studyQueue.length}`;
   $("#wordReveal").hidden = true;
   $("#ratingActions").hidden = true;
   $("#quizOptions").hidden = true;
