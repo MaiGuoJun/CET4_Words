@@ -312,7 +312,7 @@ function applyTheme() {
 
 async function loadContent() {
   const [wordResult, trackResult] = await Promise.allSettled([
-    fetch("./data/words.json?v=8").then((response) => {
+    fetch("./data/words.json?v=9").then((response) => {
       if (!response.ok) throw new Error("word data unavailable");
       return response.json();
     }),
@@ -466,6 +466,50 @@ function currentStudyQueue() {
   return [...due, ...fresh].slice(0, Math.max(state.settings.dailyTarget + due.length, 1));
 }
 
+function wordSenseRows(word) {
+  const senses = Array.isArray(word?.senses) ? word.senses.filter((sense) => sense?.meaning) : [];
+  if (senses.length) return senses;
+  return [{
+    partOfSpeech: word?.partOfSpeech || "词义",
+    meaning: word?.translation || "暂无释义",
+    stars: 3
+  }];
+}
+
+function frequencyStars(value) {
+  const score = Math.max(1, Math.min(3, Number(value) || 1));
+  const label = Number.isInteger(score) ? String(score) : score.toFixed(1);
+  const stars = [1, 2, 3].map((position) => {
+    const className = score >= position ? "full" : score >= position - 0.5 ? "half" : "empty";
+    return `<span class="frequency-star ${className}" aria-hidden="true">★</span>`;
+  }).join("");
+  return `<span class="sense-stars" role="img" aria-label="四级考频 ${label} 星" title="四级考频 ${label} / 3 星">${stars}</span>`;
+}
+
+function renderWordMeanings(word) {
+  $("#wordMeanings").innerHTML = wordSenseRows(word).map((sense) => `
+    <li class="meaning-item">
+      <span class="sense-pos">${escapeHtml(sense.partOfSpeech || "词义")}</span>
+      <span class="sense-text">${escapeHtml(sense.meaning)}</span>
+      ${frequencyStars(sense.stars)}
+    </li>
+  `).join("");
+}
+
+function wordPhraseRows(word) {
+  const phrases = Array.isArray(word?.phrases) ? word.phrases.filter((item) => item?.text) : [];
+  if (phrases.length) return phrases;
+  return word?.phrase ? [{ text: word.phrase, meaning: word.phraseMeaning || "" }] : [];
+}
+
+function renderWordPhrases(word) {
+  const phrases = wordPhraseRows(word);
+  $("#phraseBox").hidden = !phrases.length;
+  $("#wordPhrases").innerHTML = phrases.map((item) => `
+    <li><strong>${escapeHtml(item.text)}</strong>${item.meaning ? `<p>${escapeHtml(item.meaning)}</p>` : ""}</li>
+  `).join("");
+}
+
 function renderCurrentWord() {
   stopPronunciationAudio();
   resetNativePronunciationPlayer();
@@ -481,8 +525,7 @@ function renderCurrentWord() {
   const item = getWordState(currentWord);
   $("#wordText").textContent = currentWord.word;
   $("#wordPhonetic").textContent = currentWord.phonetic ? `/${currentWord.phonetic.replace(/^\/?|\/?$/g, "")}/` : "";
-  $("#wordPartOfSpeech").textContent = currentWord.partOfSpeech || "";
-  $("#wordTranslation").textContent = currentWord.translation || "暂无释义";
+  renderWordMeanings(currentWord);
   $("#wordRank").textContent = `词频 #${currentWord.rank || currentWord.frequency || "—"}`;
   $("#wordStatus").textContent = item ? ({ known: "认识", fuzzy: "模糊", unknown: "不认识" }[item.status] || "待复习") : "未分类";
   $("#studyPosition").textContent = `${currentWordIndex + 1} / ${queue.length}`;
@@ -491,10 +534,7 @@ function renderCurrentWord() {
   $("#quizOptions").hidden = true;
   $("#revealWord").hidden = false;
   $("#revealWord").textContent = "显示释义";
-  const hasPhrase = Boolean(currentWord.phrase);
-  $("#phraseBox").hidden = !hasPhrase;
-  $("#wordPhrase").textContent = currentWord.phrase || "";
-  $("#phraseMeaning").textContent = currentWord.phraseMeaning || "";
+  renderWordPhrases(currentWord);
   void prepareCurrentPronunciation(currentWord.word);
   replayMotion($("#wordWorkspace"), "word-enter");
 }
@@ -511,6 +551,9 @@ function renderEmptyStudy() {
   $("#quizOptions").hidden = true;
   $("#revealWord").hidden = true;
   $("#studyPosition").textContent = "✓";
+  $("#wordMeanings").replaceChildren();
+  $("#wordPhrases").replaceChildren();
+  $("#phraseBox").hidden = true;
   setPronunciationButton("idle");
 }
 
@@ -2228,7 +2271,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=25", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=26", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

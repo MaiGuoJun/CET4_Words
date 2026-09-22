@@ -255,11 +255,21 @@ html[data-theme="light"] .pronunciation-player { color-scheme: light; }
 .word-reveal { margin-top: 26px; }
 .word-reveal.reveal-enter { animation: reveal-in 320ms var(--ease-out) both; }
 @keyframes reveal-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: none; } }
-.translation { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 9px; margin-bottom: 18px; font-size: clamp(1.1rem, 2vw, 1.4rem); line-height: 1.65; }
-.part-of-speech { padding: 3px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--accent-soft); color: var(--accent); font: 700 0.72rem var(--font-ui); letter-spacing: 0.025em; }
-.part-of-speech:empty { display: none; }
+.meaning-section { max-width: 600px; margin: 0 auto 18px; }
+.meaning-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 9px; color: var(--muted); text-align: left; font: 700 0.68rem var(--font-ui); letter-spacing: 0.11em; }
+.meaning-heading small { font-size: 0.66rem; font-weight: 500; letter-spacing: 0; }
+.meaning-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.meaning-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 48px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-soft); text-align: left; }
+.sense-pos { min-width: 42px; padding: 3px 7px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--accent-soft); color: var(--accent); text-align: center; font: 700 0.7rem var(--font-ui); letter-spacing: 0.02em; }
+.sense-text { font-size: clamp(1rem, 2vw, 1.17rem); line-height: 1.55; }
+.sense-stars { display: inline-flex; gap: 1px; white-space: nowrap; font-size: 0.82rem; letter-spacing: -0.05em; }
+.frequency-star.full { color: #ffc857; }
+.frequency-star.empty { color: var(--line-strong); }
+.frequency-star.half { color: transparent; background: linear-gradient(90deg, #ffc857 50%, var(--line-strong) 50%); background-clip: text; -webkit-background-clip: text; }
 .phrase-box { max-width: 520px; margin: 0 auto; padding: 15px 18px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--accent-soft); text-align: left; }
-.phrase-box span { display: block; margin-bottom: 5px; color: var(--accent); font-size: 0.68rem; letter-spacing: 0.12em; }
+.phrase-box > span { display: block; margin-bottom: 8px; color: var(--accent); font-size: 0.68rem; letter-spacing: 0.12em; }
+.phrase-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.phrase-list li + li { padding-top: 9px; border-top: 1px solid var(--line); }
 .phrase-box strong { font-size: 1rem; }
 .phrase-box p { margin: 5px 0 0; color: var(--muted); font-size: 0.86rem; }
 .reveal-button { margin-top: 24px; }
