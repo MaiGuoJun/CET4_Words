@@ -20,7 +20,11 @@ requireText(app, '"translation":"complete natural Chinese translation of reply"'
 requireText(server, '"translation":"complete natural Chinese translation of reply"', "server translation contract");
 requireText(app, "Never claim that you are text-only", "voice capability instruction");
 requireText(html, 'id="aiVoiceTranslationToggle" hidden', "collapsed voice translation control");
-requireText(app, "For every complete sentence", "sentence-by-sentence correction contract");
+requireText(app, "omit natural/correct sentences completely", "errors-only correction contract");
+requireText(app, "meaningfulAIFeedback", "correct-feedback filter");
+requireText(server, "saysCorrect", "server correct-feedback filter");
+requireText(app, "startCloudVoiceListening", "mobile cloud voice conversation recorder");
+requireText(html, 'id="aiVoiceEnd"', "voice conversation end control");
 requireText(html, 'data-ai-mode="writing"', "writing review mode");
 requireText(html, 'id="dictationPanel"', "sentence dictation panel");
 requireText(html, 'id="listeningWordQueue"', "listening SRS queue");
@@ -37,6 +41,6 @@ requireText(app, 'if (mode === "review")', "review group queue");
 requireText(app, "soundScore", "acoustic score component");
 requireText(app, "rhythmScore", "rhythm score component");
 requireText(html, 'id="assessWordPronunciation"', "word pronunciation assessment control");
-requireText(html, "app.js?v=41", "v41 script cache bust");
+requireText(html, "app.js?v=42", "v42 script cache bust");
 
 console.log("AI contract smoke test passed");

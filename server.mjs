@@ -255,7 +255,13 @@ function parseTutorReply(text) {
         original: String(item?.original || "").slice(0, 300),
         correction: String(item?.correction || "").slice(0, 300),
         reason: String(item?.reason || "").slice(0, 300)
-      })).filter((item) => item.correction).slice(0, 8) : [],
+      })).filter((item) => {
+        if (!item.correction) return false;
+        const original = item.original.trim().replace(/\s+/g, " ").toLowerCase();
+        const correction = item.correction.trim().replace(/\s+/g, " ").toLowerCase();
+        const saysCorrect = /无需修改|表达自然|没有(?:语法)?错误|无(?:需)?纠正|already (?:correct|natural)|no (?:change|correction|error)/i.test(item.reason);
+        return !(original && correction && original === correction) && !saysCorrect;
+      }).slice(0, 8) : [],
       vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.map((item) => ({
         word: String(item?.word || "").slice(0, 80),
         meaning: String(item?.meaning || "").slice(0, 160),
@@ -395,7 +401,7 @@ Keep the conversation natural and encouraging, but do not give empty praise. Rep
 
 The app supports voice: it displays your English reply and a separate text-to-speech service reads that exact reply aloud. Never claim that you are text-only, that the app has no voice, or that spoken output is a separate answer. If asked about voice, explain this accurately and briefly.
 
-Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. For every complete sentence in the learner's message, include one feedback item in the same order. If a sentence is already natural, repeat it as the correction and use "表达自然，无需修改" as the reason. Include at most eight feedback items and two vocabulary items.`;
+Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence that contains an actual error","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Feedback must contain only sentences that genuinely need correction; omit natural/correct sentences completely, and return an empty feedback array when there is no error. Include at most eight feedback items and two vocabulary items.`;
 
   const messages = [{ role: "system", content: instructions }, ...history, { role: "user", content: message }];
   const failures = [];

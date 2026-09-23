@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=41" />
+    <link rel="stylesheet" href="./styles.css?v=42" />
   </head>
   <body>
     <div class="app-shell">
@@ -298,8 +298,11 @@
                   <button class="ai-translation-toggle" type="button" id="aiVoiceTranslationToggle" hidden>显示翻译</button>
                   <p class="ai-voice-translation" id="aiVoiceTranslation" hidden></p>
                 </div>
-                <button class="button primary ai-voice-toggle" type="button" id="aiVoiceToggle">开始语音练习</button>
-                <p class="ai-voice-privacy">AI 回答由当前已连接的服务生成。语音识别由浏览器提供，部分浏览器可能联网完成识别；本应用不会保存录音。</p>
+                <div class="ai-voice-actions">
+                  <button class="button primary ai-voice-toggle" type="button" id="aiVoiceToggle">开始语音练习</button>
+                  <button class="button ghost" type="button" id="aiVoiceEnd" hidden>结束练习</button>
+                </div>
+                <p class="ai-voice-privacy">选择“智谱云识别”时，手机会录制单句并在你点击“发送这句”后转成文字；选择浏览器识别时，说完停顿即可。录音只用于当次识别，不会保存。</p>
               </div>
 
               <div class="ai-writing-panel" id="aiWritingPanel" hidden>
@@ -371,7 +374,7 @@
                 <label class="field"><span>AI 回复朗读</span><select id="deviceAIVoiceSelect"><option value="glm-tts">GLM-TTS · 原文自然朗读</option><option value="system">设备系统声音 · 免费</option></select></label>
               </div>
               <div class="data-actions sync-actions"><button class="button primary" type="button" id="saveDeviceAI">保存到此设备</button><button class="button ghost" type="button" id="clearDeviceAI">移除密钥</button></div>
-              <p class="sync-note">云识别会临时上传录音；自然朗读使用 GLM-TTS，严格朗读屏幕上的英文回复。两项都会使用智谱额度，也可切回免费的设备方案。密钥不会进入学习记录、同步、备份或 GitHub。</p>
+              <p class="sync-note">云识别会临时上传录音；自然朗读使用 GLM-TTS，严格朗读屏幕上的英文回复。语音额度与通用文字 Token 可能分开；没有可用语音额度时会自动改用手机系统声音。密钥不会进入学习记录、同步、备份或 GitHub。</p>
             </section>
 
             <section class="card settings-section wide">
@@ -458,6 +461,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=41" defer></script>
+    <script src="./app.js?v=42" defer></script>
   </body>
 </html>

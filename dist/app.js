@@ -206,6 +206,8 @@ let aiServiceInfo = null;
 let aiBackendAvailable = false;
 let deviceAIConfig = loadDeviceAIConfig();
 let aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: false, messageIndex: null };
+let zhipuSpeechUnavailableUntil = 0;
+let zhipuSpeechFailureReason = "";
 let shadowingState = { messageIndex: null, status: "idle", recognition: null, mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
 let wordPronunciationAssessment = { word: "", status: "idle", mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, provider: "", phonemes: [], errorType: "", error: "" };
 const ttsAssessmentCache = new Map();
@@ -214,6 +216,11 @@ let voiceSession = {
   state: "idle",
   active: false,
   recognition: null,
+  mediaRecorder: null,
+  mediaStream: null,
+  mediaChunks: [],
+  stopTimer: null,
+  abortRecording: false,
   restartTimer: null,
   utterance: null,
   audio: null,
@@ -1729,7 +1736,7 @@ async function fetchCloudPronunciation(word) {
 }
 
 async function fetchZhipuWordPronunciation(word) {
-  if (!deviceAIConfig.apiKey) return null;
+  if (!naturalSpeechEnabled()) return null;
   try {
     const blob = await requestAssessmentSpeech(word);
     const objectUrl = URL.createObjectURL(blob);
@@ -2577,7 +2584,7 @@ function currentAISession() {
 }
 
 function renderAIFeedback(feedback = []) {
-  const items = Array.isArray(feedback) ? feedback.slice(0, 8) : [];
+  const items = meaningfulAIFeedback(feedback).slice(0, 8);
   if (!items.length) return "";
   return `<div class="ai-feedback"><div class="ai-feedback-heading">逐句纠错</div>${items.map((item) => `
     <div class="ai-feedback-card">
@@ -2585,6 +2592,18 @@ function renderAIFeedback(feedback = []) {
       <p><span>修正</span><strong>${escapeHtml(item.correction || "")}</strong></p>
       <p><span>原因</span>${escapeHtml(item.reason || "")}</p>
     </div>`).join("")}</div>`;
+}
+
+function meaningfulAIFeedback(feedback = []) {
+  if (!Array.isArray(feedback)) return [];
+  return feedback.filter((item) => {
+    const original = String(item?.original || "").trim().replace(/\s+/g, " ").toLowerCase();
+    const correction = String(item?.correction || "").trim().replace(/\s+/g, " ").toLowerCase();
+    const reason = String(item?.reason || "").trim().toLowerCase();
+    const unchanged = original && correction && original === correction;
+    const saysCorrect = /无需修改|表达自然|没有(?:语法)?错误|无(?:需)?纠正|already (?:correct|natural)|no (?:change|correction|error)/i.test(reason);
+    return !(unchanged || saysCorrect);
+  });
 }
 
 function renderShadowingResult(message, index) {
@@ -2728,7 +2747,8 @@ function renderVoiceUI() {
   const labels = {
     idle: [voiceSession.statusMessage, voiceSession.hintMessage],
     connecting: ["正在启动语音练习…", "首次使用时，请允许浏览器访问麦克风。"],
-    listening: ["正在听你说…", "说完一句后停顿一下，AI 会开始回答。"],
+    listening: ["正在听你说…", voiceSession.mediaRecorder ? "说完后点击“发送这句”，最长可录 20 秒。" : "说完一句后停顿一下，AI 会开始回答。"],
+    processing: ["正在识别你的语音…", "录音已完成，请稍等片刻。"],
     thinking: ["AI 正在思考…", "在线回答可能需要等待十几秒。"],
     speaking: ["AI 正在朗读回答…", "朗读结束后会自动继续听你说。"],
     error: [voiceSession.statusMessage, voiceSession.hintMessage]
@@ -2753,14 +2773,27 @@ function renderVoiceUI() {
   translationText.textContent = expanded ? latest.translation : "";
   const toggle = $("#aiVoiceToggle");
   const active = isVoiceActive();
-  toggle.textContent = active ? "结束语音练习" : "开始语音练习";
+  const cloudRecording = active && voiceSession.state === "listening" && Boolean(voiceSession.mediaRecorder);
+  toggle.textContent = cloudRecording ? "发送这句" : active ? "结束语音练习" : "开始语音练习";
   toggle.classList.toggle("live", active);
-  toggle.disabled = voiceSession.state === "connecting";
+  toggle.disabled = ["connecting", "processing", "thinking"].includes(voiceSession.state);
+  const endButton = $("#aiVoiceEnd");
+  if (endButton) endButton.hidden = !active;
 }
 
 function closeVoiceResources() {
   clearTimeout(voiceSession.restartTimer);
+  clearTimeout(voiceSession.stopTimer);
   voiceSession.restartTimer = null;
+  voiceSession.stopTimer = null;
+  if (voiceSession.mediaRecorder) {
+    voiceSession.abortRecording = true;
+    try { if (voiceSession.mediaRecorder.state !== "inactive") voiceSession.mediaRecorder.stop(); } catch {}
+  }
+  voiceSession.mediaStream?.getTracks().forEach((track) => track.stop());
+  voiceSession.mediaRecorder = null;
+  voiceSession.mediaStream = null;
+  voiceSession.mediaChunks = [];
   const recognition = voiceSession.recognition;
   voiceSession.recognition = null;
   try { recognition?.abort(); } catch {}
@@ -3067,7 +3100,7 @@ async function requestCloudTranscription(wavBlob) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     if ([401, 403].includes(response.status)) throw new Error("智谱 API Key 无效或没有语音识别权限。" );
-    if (response.status === 429) throw new Error("智谱语音识别额度不足或请求过多。" );
+    if (response.status === 429) throw new Error("智谱语音识别没有可用额度或资源包，请稍后重试或改用浏览器识别。" );
     throw new Error(data?.error?.message || `语音识别失败（${response.status}）。`);
   }
   const text = String(data?.text || "").trim();
@@ -3632,11 +3665,12 @@ function stopAITextSpeech(shouldRender = true) {
 }
 
 function naturalSpeechEnabled() {
-  return Boolean(deviceAIConfig.apiKey && deviceAIConfig.speechVoice && deviceAIConfig.speechVoice !== "system");
+  return Boolean(deviceAIConfig.apiKey && deviceAIConfig.speechVoice && deviceAIConfig.speechVoice !== "system" && Date.now() >= zhipuSpeechUnavailableUntil);
 }
 
 async function requestAssessmentSpeech(text) {
   if (!deviceAIConfig.apiKey) throw new Error("发音相似度需要先在设置中保存智谱 API Key。" );
+  if (Date.now() < zhipuSpeechUnavailableUntil) throw new Error(zhipuSpeechFailureReason || "智谱自然朗读暂时没有可用额度。" );
   const content = String(text || "").trim().slice(0, 900);
   const response = await fetch(ZHIPU_TTS_URL, {
     method: "POST",
@@ -3656,7 +3690,11 @@ async function requestAssessmentSpeech(text) {
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     if ([401, 403].includes(response.status)) throw new Error("智谱 API Key 无效或没有自然朗读权限。" );
-    if (response.status === 429) throw new Error("智谱自然朗读额度不足或请求过多。" );
+    if (response.status === 429) {
+      zhipuSpeechUnavailableUntil = Date.now() + 30 * 60 * 1000;
+      zhipuSpeechFailureReason = "智谱自然朗读没有可用余额或语音资源包";
+      throw new Error(zhipuSpeechFailureReason);
+    }
     throw new Error(data?.error?.message || `自然朗读生成失败（${response.status}）。`);
   }
   const blob = await response.blob();
@@ -3673,8 +3711,9 @@ function speakTextWithSystem(text, messageIndex) {
   if (!("speechSynthesis" in window)) return toast("当前浏览器不支持朗读", "请使用最新版 Chrome 或 Edge。" );
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = state.settings.accent || "en-US";
-  utterance.rate = 0.88;
-  const selected = speechSynthesis.getVoices().find((voice) => voice.voiceURI === state.settings.voiceURI);
+  utterance.rate = 0.82;
+  utterance.pitch = 0.96;
+  const selected = selectSystemEnglishVoice();
   if (selected) utterance.voice = selected;
   aiTextSpeech = { utterance, audio: null, objectUrl: null, loading: false, messageIndex };
   const finish = () => {
@@ -3686,6 +3725,19 @@ function speakTextWithSystem(text, messageIndex) {
   utterance.addEventListener("error", finish, { once: true });
   renderAITextSpeechButtons();
   speechSynthesis.speak(utterance);
+}
+
+function selectSystemEnglishVoice() {
+  const voices = "speechSynthesis" in window ? speechSynthesis.getVoices() : [];
+  const saved = voices.find((voice) => voice.voiceURI === state.settings.voiceURI);
+  if (saved) return saved;
+  const accent = state.settings.accent || "en-US";
+  const candidates = voices.filter((voice) => /^en[-_]/i.test(voice.lang));
+  return candidates.find((voice) => voice.lang.replace("_", "-").toLowerCase() === accent.toLowerCase() && /google|microsoft|samantha|daniel|natural/i.test(voice.name))
+    || candidates.find((voice) => voice.lang.replace("_", "-").toLowerCase() === accent.toLowerCase())
+    || candidates.find((voice) => /google|microsoft|samantha|daniel|natural/i.test(voice.name))
+    || candidates[0]
+    || null;
 }
 
 async function toggleAITextSpeech(messageIndex) {
@@ -3724,7 +3776,7 @@ async function toggleAITextSpeech(messageIndex) {
   } catch (error) {
     if (aiTextSpeech.messageIndex !== messageIndex) return;
     stopAITextSpeech();
-    toast("自然朗读暂时不可用", `${error.message || "生成失败"} 已切换到设备声音。`);
+    toast("已切换到手机系统声音", `${error.message || "智谱自然朗读暂时不可用"}；本次仍会继续朗读。`);
     speakTextWithSystem(message.content, messageIndex);
   }
 }
@@ -3735,8 +3787,90 @@ function scheduleVoiceListening(delay = 450) {
   voiceSession.restartTimer = window.setTimeout(beginVoiceListening, delay);
 }
 
+function stopCloudVoiceTurn(abort = false) {
+  clearTimeout(voiceSession.stopTimer);
+  voiceSession.stopTimer = null;
+  const recorder = voiceSession.mediaRecorder;
+  if (!recorder) return;
+  voiceSession.abortRecording = abort;
+  if (!abort) voiceSession.state = "processing";
+  renderVoiceUI();
+  try {
+    if (recorder.state !== "inactive") recorder.stop();
+  } catch {
+    if (!abort) failVoiceSession("无法结束本次录音", "请结束语音练习后重新开始。" );
+  }
+}
+
+async function finishCloudVoiceTurn(recorder, chunks, aborted) {
+  if (voiceSession.mediaRecorder === recorder) voiceSession.mediaRecorder = null;
+  const stream = voiceSession.mediaStream;
+  voiceSession.mediaStream = null;
+  voiceSession.mediaChunks = [];
+  stream?.getTracks().forEach((track) => track.stop());
+  if (aborted || !voiceSession.active) return;
+  voiceSession.state = "processing";
+  renderVoiceUI();
+  try {
+    const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    if (!recorded.size) throw new Error("没有录到声音，请重新说一次。" );
+    const wav = await convertRecordingToWav(recorded);
+    const content = await requestCloudTranscription(wav);
+    voiceSession.transcript = `你：${content}`;
+    renderVoiceUI();
+    await submitVoiceTurn(content);
+  } catch (error) {
+    if (!voiceSession.active) return;
+    voiceSession.state = "error";
+    voiceSession.statusMessage = "这句话没有识别成功";
+    voiceSession.hintMessage = error.message || "请靠近麦克风后重新开始。";
+    renderVoiceUI();
+  }
+}
+
+async function startCloudVoiceListening() {
+  if (!navigator.mediaDevices?.getUserMedia || !("MediaRecorder" in window)) {
+    return failVoiceSession("当前浏览器不支持录音", "请使用最新版 Chrome，并确认已通过 HTTPS 打开网页。" );
+  }
+  voiceSession.state = "connecting";
+  renderVoiceUI();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    if (!voiceSession.active) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks = [];
+    voiceSession.mediaRecorder = recorder;
+    voiceSession.mediaStream = stream;
+    voiceSession.mediaChunks = chunks;
+    voiceSession.abortRecording = false;
+    recorder.addEventListener("dataavailable", (event) => { if (event.data?.size) chunks.push(event.data); });
+    recorder.addEventListener("stop", () => {
+      const aborted = voiceSession.abortRecording;
+      voiceSession.abortRecording = false;
+      void finishCloudVoiceTurn(recorder, chunks, aborted);
+    }, { once: true });
+    recorder.start(250);
+    voiceSession.state = "listening";
+    voiceSession.stopTimer = window.setTimeout(() => stopCloudVoiceTurn(false), 20000);
+    renderVoiceUI();
+  } catch (error) {
+    failVoiceSession(
+      error?.name === "NotAllowedError" ? "没有获得麦克风权限" : "无法启动手机录音",
+      error?.name === "NotAllowedError" ? "请在浏览器的网站设置中允许此网页使用麦克风。" : error.message || "请重新开始语音练习。"
+    );
+  }
+}
+
 function beginVoiceListening() {
-  if (!voiceSession.active || voiceSession.recognition) return;
+  if (!voiceSession.active || voiceSession.recognition || voiceSession.mediaRecorder) return;
+  if (deviceAIConfig.speechInput === "glm-asr" && deviceAIConfig.apiKey) {
+    void startCloudVoiceListening();
+    return;
+  }
   const Recognition = speechRecognitionConstructor();
   if (!Recognition) return failVoiceSession("当前浏览器不支持语音识别", "请使用最新版 Chrome 或 Edge，也可以继续使用文字对话。" );
 
@@ -3793,8 +3927,9 @@ function speakVoiceReplyWithSystem(text) {
     const utterance = new SpeechSynthesisUtterance(text);
     voiceSession.utterance = utterance;
     utterance.lang = state.settings.accent || "en-US";
-    utterance.rate = 0.88;
-    const selected = speechSynthesis.getVoices().find((voice) => voice.voiceURI === state.settings.voiceURI);
+    utterance.rate = 0.82;
+    utterance.pitch = 0.96;
+    const selected = selectSystemEnglishVoice();
     if (selected) utterance.voice = selected;
     utterance.addEventListener("start", () => {
       if (!voiceSession.active) return;
@@ -3846,7 +3981,7 @@ async function speakVoiceReply(text) {
       URL.revokeObjectURL(voiceSession.objectUrl);
       voiceSession.objectUrl = null;
     }
-    toast("自然朗读暂时不可用", `${error.message || "生成失败"} 已切换到设备声音。`);
+    toast("已切换到手机系统声音", `${error.message || "智谱自然朗读暂时不可用"}；语音对话可以继续。`);
     await speakVoiceReplyWithSystem(text);
   }
 }
@@ -3958,7 +4093,7 @@ Keep the conversation natural and encouraging, but do not give empty praise. Rep
 
 The app supports voice: it displays your English reply and a separate text-to-speech service reads that exact reply aloud. Never claim that you are text-only, that the app has no voice, or that spoken output is a separate answer. If asked about voice, explain this accurately and briefly.
 
-Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. For every complete sentence in the learner's message, include one feedback item in the same order. If a sentence is already natural, repeat it as the correction and use "表达自然，无需修改" as the reason. Include at most eight feedback items and two vocabulary items.`;
+Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence that contains an actual error","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Feedback must contain only sentences that genuinely need correction; omit natural/correct sentences completely, and return an empty feedback array when there is no error. Include at most eight feedback items and two vocabulary items.`;
 }
 
 function parseDirectTutorReply(text) {
@@ -3968,7 +4103,7 @@ function parseDirectTutorReply(text) {
     return {
       reply: typeof parsed.reply === "string" ? parsed.reply.trim() : "",
       translation: typeof parsed.translation === "string" ? parsed.translation.trim() : "",
-      feedback: Array.isArray(parsed.feedback) ? parsed.feedback.slice(0, 8) : [],
+      feedback: meaningfulAIFeedback(parsed.feedback).slice(0, 8),
       vocabulary: Array.isArray(parsed.vocabulary) ? parsed.vocabulary.slice(0, 2) : []
     };
   } catch {
@@ -4055,7 +4190,7 @@ async function submitVoiceTurn(content) {
       role: "assistant",
       content: reply,
       translation: String(result.translation || ""),
-      feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 8) : [],
+      feedback: meaningfulAIFeedback(result.feedback).slice(0, 8),
       vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.slice(0, 2) : [],
       createdAt: new Date().toISOString()
     });
@@ -4077,7 +4212,8 @@ function startVoiceConversation() {
   if (aiServiceStatus !== "ready") {
     return failVoiceSession("AI 尚未就绪", "请先在设置中配置手机 AI，或在电脑上启动本机服务。" );
   }
-  if (!speechRecognitionConstructor()) {
+  const cloudRecognition = deviceAIConfig.speechInput === "glm-asr" && deviceAIConfig.apiKey;
+  if (!cloudRecognition && !speechRecognitionConstructor()) {
     return failVoiceSession("当前浏览器不支持语音识别", "请使用最新版 Chrome 或 Edge，也可以继续使用文字对话。" );
   }
   closeVoiceResources();
@@ -4103,8 +4239,9 @@ function stopVoiceImmediately(shouldRender = true) {
 }
 
 function toggleVoiceConversation() {
-  if (isVoiceActive()) finishVoiceConversation();
-  else startVoiceConversation();
+  if (!isVoiceActive()) return startVoiceConversation();
+  if (voiceSession.mediaRecorder && voiceSession.state === "listening") return stopCloudVoiceTurn(false);
+  finishVoiceConversation();
 }
 
 async function checkAIStatus() {
@@ -4153,7 +4290,7 @@ async function sendAIMessage(event) {
       role: "assistant",
       content: String(result.reply || "Let’s try another way. Could you tell me a little more?"),
       translation: String(result.translation || ""),
-      feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 8) : [],
+      feedback: meaningfulAIFeedback(result.feedback).slice(0, 8),
       vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.slice(0, 2) : [],
       createdAt: new Date().toISOString()
     });
@@ -4254,6 +4391,8 @@ async function configureDeviceAI() {
     speechInput: $("#deviceAISpeechInputSelect").value || "glm-asr",
     speechVoice: $("#deviceAIVoiceSelect").value || "glm-tts"
   };
+  zhipuSpeechUnavailableUntil = 0;
+  zhipuSpeechFailureReason = "";
   saveDeviceAIConfig();
   input.value = "";
   await checkAIStatus();
@@ -4521,6 +4660,7 @@ function bindEvents() {
   });
   $("#aiDictation").addEventListener("click", toggleTextDictation);
   $("#aiVoiceToggle").addEventListener("click", toggleVoiceConversation);
+  $("#aiVoiceEnd").addEventListener("click", finishVoiceConversation);
   $("#aiWritingType").addEventListener("change", updateWritingLabels);
   $("#aiWritingSubmit").addEventListener("click", () => { void submitWritingReview(); });
   $("#aiForm").addEventListener("submit", sendAIMessage);
@@ -4671,7 +4811,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=41", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=42", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
