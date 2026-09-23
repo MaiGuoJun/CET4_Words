@@ -14,6 +14,7 @@ const DEFAULT_SYNC_ENDPOINT = "https://mogu-cet4-sync.wb408study.workers.dev";
 const DEVICE_AI_CONFIG_KEY = "mogu-cet4-device-ai-v1";
 const ZHIPU_CHAT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const ZHIPU_ASR_URL = "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions";
+const ZHIPU_TTS_URL = "https://open.bigmodel.cn/api/paas/v4/audio/speech";
 const DEFAULT_ZHIPU_MODEL = "glm-5.3-flash";
 
 const fallbackWords = [
@@ -101,27 +102,32 @@ const AI_SCENARIOS = {
   campus: {
     title: "校园生活",
     goal: "围绕校园日常自然交流，并学会补充理由。",
-    opening: "Let’s talk about campus life. What is one part of your daily routine at school that you enjoy?"
+    opening: "Let’s talk about campus life. What is one part of your daily routine at school that you enjoy?",
+    openingTranslation: "我们来聊聊校园生活吧。你在学校的日常生活中，最喜欢哪一部分？"
   },
   travel: {
     title: "旅行出行",
     goal: "练习问路、交通、住宿等真实出行情景。",
-    opening: "Imagine you are planning a short trip. Where would you like to go, and how would you travel there?"
+    opening: "Imagine you are planning a short trip. Where would you like to go, and how would you travel there?",
+    openingTranslation: "假设你正在计划一次短途旅行。你想去哪里，又会选择怎样的交通方式？"
   },
   interview: {
     title: "面试表达",
     goal: "清楚介绍自己，并用具体例子说明个人经历。",
-    opening: "Welcome! Please introduce yourself and tell me about one strength that would help you in a student club."
+    opening: "Welcome! Please introduce yourself and tell me about one strength that would help you in a student club.",
+    openingTranslation: "欢迎！请介绍一下自己，并说说你的一项优点，这项优点能如何帮助你参加学生社团。"
   },
   technology: {
     title: "科技话题",
     goal: "围绕常见四级科技话题表达观点、理由与例子。",
-    opening: "Technology has changed the way students learn. Which change has helped you the most, and why?"
+    opening: "Technology has changed the way students learn. Which change has helped you the most, and why?",
+    openingTranslation: "科技改变了学生的学习方式。哪一种变化对你的帮助最大？为什么？"
   },
   free: {
     title: "自由畅聊",
     goal: "不设固定情景，跟随你感兴趣的话题自由交流。",
-    opening: "This is an open conversation. What would you like to talk about today?"
+    opening: "This is an open conversation. What would you like to talk about today?",
+    openingTranslation: "这是一次自由对话。今天你想聊些什么？"
   }
 };
 
@@ -169,7 +175,7 @@ let currentWord = null;
 let studyQueue = [];
 let screeningSessionOffset = 0;
 let stableStudyHeight = 0;
-let activeWordTool = "mnemonic";
+let activeWordTool = "similar";
 let wordLookup = new Map();
 let wordFamilyIndex = new Map();
 let confusableIndex = new Map();
@@ -193,6 +199,7 @@ let aiServiceInfo = null;
 let aiBackendAvailable = false;
 let deviceAIConfig = loadDeviceAIConfig();
 let aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: false, messageIndex: null };
+const visibleAITranslations = new Set();
 let voiceSession = {
   state: "idle",
   active: false,
@@ -298,10 +305,10 @@ function loadDeviceAIConfig() {
     const parsed = JSON.parse(localStorage.getItem(DEVICE_AI_CONFIG_KEY));
     const model = ["glm-5.3-flash", "glm-5.3-flashx"].includes(parsed?.model) ? parsed.model : DEFAULT_ZHIPU_MODEL;
     const speechInput = ["glm-asr", "browser"].includes(parsed?.speechInput) ? parsed.speechInput : "glm-asr";
-    const speechVoice = ["glm-4-voice", "system"].includes(parsed?.speechVoice) ? parsed.speechVoice : "glm-4-voice";
+    const speechVoice = parsed?.speechVoice === "system" ? "system" : "glm-tts";
     return { apiKey: String(parsed?.apiKey || "").trim(), model, speechInput, speechVoice };
   } catch {
-    return { apiKey: "", model: DEFAULT_ZHIPU_MODEL, speechInput: "glm-asr", speechVoice: "glm-4-voice" };
+    return { apiKey: "", model: DEFAULT_ZHIPU_MODEL, speechInput: "glm-asr", speechVoice: "glm-tts" };
   }
 }
 
@@ -1249,22 +1256,6 @@ function findSimilarWords(word, derivatives) {
   return result.slice(0, 4);
 }
 
-function buildWordMnemonic(word, insight) {
-  const meaning = conciseWordMeaning(word);
-  const pieces = [
-    ...insight.affixes.map((item) => `${item.label}（${item.meaning}）`),
-    ...insight.roots.map((item) => `${item.label}（${item.meaning}）`)
-  ];
-  if (pieces.length) return `拆词联想：${pieces.join(" + ")}。把这些线索和核心义“${meaning}”连在一起记。`;
-  if (insight.derivatives.length) {
-    const names = insight.derivatives.slice(0, 3).map((item) => item.word).join("、");
-    return `词族联想：把 ${word.word} 和 ${names} 放在一起比较，先抓住共同拼写，再锁定核心义“${meaning}”。`;
-  }
-  const phrase = wordPhraseRows(word)[0];
-  if (phrase) return `搭配联想：用 “${phrase.text}” 记住“${phrase.meaning || meaning}”，让 ${word.word} 留在完整语境里。`;
-  return `核心义联想：先把 ${word.word} 锁定为“${meaning}”；复习时遮住中文，先读出单词，再主动回想意思。`;
-}
-
 function buildWordInsight(word) {
   const key = normalizedWordName(word?.word);
   if (wordInsightCache.has(key)) return wordInsightCache.get(key);
@@ -1273,7 +1264,6 @@ function buildWordInsight(word) {
   const derivatives = findWordDerivatives(word);
   const insight = { roots, affixes, derivatives, similar: [] };
   insight.similar = findSimilarWords(word, derivatives);
-  insight.mnemonic = buildWordMnemonic(word, insight);
   wordInsightCache.set(key, insight);
   return insight;
 }
@@ -1312,8 +1302,6 @@ function renderWordInsights(word) {
     panel.innerHTML = insight.roots.length ? `<div class="morpheme-list">${insight.roots.map((item) => `
       <article class="morpheme-item"><small>词根线索</small><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.meaning)}</p><code>${escapeHtml(item.matched)}</code></article>
     `).join("")}</div><p class="word-tool-note">词根用于辅助联想，不建议用它代替单词在句子里的真实含义。</p>` : `<p class="word-tool-empty">这个词更适合整体记忆，不建议为了拆词而强行找词根。</p>`;
-  } else {
-    panel.innerHTML = `<div class="mnemonic-copy"><span>记忆路线</span><p>${escapeHtml(insight.mnemonic)}</p></div><p class="word-tool-note">先理解核心义，再用词族、词根或搭配加深印象。</p>`;
   }
 }
 
@@ -2225,10 +2213,16 @@ function currentAISession() {
     state.ai.sessions[scenario] = [{
       role: "assistant",
       content: AI_SCENARIOS[scenario].opening,
+      translation: AI_SCENARIOS[scenario].openingTranslation,
       feedback: [],
       vocabulary: [],
       createdAt: new Date().toISOString()
     }];
+    saveState();
+  }
+  const opening = state.ai.sessions[scenario][0];
+  if (opening?.role === "assistant" && opening.content === AI_SCENARIOS[scenario].opening && !opening.translation) {
+    opening.translation = AI_SCENARIOS[scenario].openingTranslation;
     saveState();
   }
   return state.ai.sessions[scenario];
@@ -2253,6 +2247,17 @@ function renderAIVocabulary(vocabulary = []) {
       <strong>${escapeHtml(item.word || "")}</strong><span>${escapeHtml(item.meaning || "")}</span>
       ${item.example ? `<p>${escapeHtml(item.example)}</p>` : ""}
     </div>`).join("")}</div>`;
+}
+
+function aiTranslationKey(message, index) {
+  return `${state.ai.scenario}:${message?.createdAt || index}`;
+}
+
+function renderAITranslation(message, index) {
+  const translation = String(message?.translation || "").trim();
+  if (!translation) return "";
+  const expanded = visibleAITranslations.has(aiTranslationKey(message, index));
+  return `<div class="ai-translation"${expanded ? "" : " hidden"}><span>中文翻译</span><p>${escapeHtml(translation)}</p></div>`;
 }
 
 function renderAI() {
@@ -2286,9 +2291,10 @@ function renderAI() {
       <div class="ai-message-label-row">
         <div class="ai-message-label">${message.role === "user" ? "YOU" : "AI TUTOR"}</div>
         ${message.role === "assistant" ? `<button class="ai-message-speak" type="button" data-ai-speak-index="${index}" aria-label="朗读这条 AI 回复" aria-pressed="${aiTextSpeech.messageIndex === index ? "true" : "false"}">${aiTextSpeech.messageIndex === index ? "■ 停止" : "▶ 朗读"}</button>` : ""}
+        ${message.role === "assistant" && message.translation ? `<button class="ai-translation-toggle" type="button" data-ai-translation-index="${index}" aria-expanded="${visibleAITranslations.has(aiTranslationKey(message, index))}">${visibleAITranslations.has(aiTranslationKey(message, index)) ? "隐藏翻译" : "显示翻译"}</button>` : ""}
       </div>
       <div class="ai-bubble">${escapeHtml(message.content || "")}</div>
-      ${message.role === "assistant" ? renderAIFeedback(message.feedback) + renderAIVocabulary(message.vocabulary) : ""}
+      ${message.role === "assistant" ? renderAITranslation(message, index) + renderAIFeedback(message.feedback) + renderAIVocabulary(message.vocabulary) : ""}
     </div>`).join("") + (aiPending ? `
     <div class="ai-message assistant latest" aria-label="AI 正在回复">
       <div class="ai-message-label-row"><div class="ai-message-label">AI TUTOR</div></div>
@@ -2348,6 +2354,19 @@ function renderVoiceUI() {
   $("#aiVoiceStatus").textContent = status;
   $("#aiVoiceHint").textContent = hint;
   $("#aiVoiceTranscript p").textContent = voiceSession.transcript || "开始后，这里会显示识别到的话和 AI 的英文回复。";
+  const messages = currentAISession();
+  const latestIndex = messages.findLastIndex((message) => message.role === "assistant" && message.translation);
+  const latest = latestIndex >= 0 ? messages[latestIndex] : null;
+  const translationButton = $("#aiVoiceTranslationToggle");
+  const translationText = $("#aiVoiceTranslation");
+  const canTranslate = Boolean(latest && voiceSession.state !== "thinking" && voiceSession.transcript.includes("AI："));
+  const expanded = canTranslate && visibleAITranslations.has(aiTranslationKey(latest, latestIndex));
+  translationButton.hidden = !canTranslate;
+  translationButton.textContent = expanded ? "隐藏翻译" : "显示翻译";
+  translationButton.setAttribute("aria-expanded", String(expanded));
+  translationButton.dataset.aiTranslationIndex = canTranslate ? String(latestIndex) : "";
+  translationText.hidden = !expanded;
+  translationText.textContent = expanded ? latest.translation : "";
   const toggle = $("#aiVoiceToggle");
   const active = isVoiceActive();
   toggle.textContent = active ? "结束语音练习" : "开始语音练习";
@@ -2704,6 +2723,16 @@ function renderAITextSpeechButtons() {
   });
 }
 
+function toggleAITranslation(messageIndex) {
+  const messages = currentAISession();
+  const message = messages[messageIndex];
+  if (!message?.translation) return;
+  const key = aiTranslationKey(message, messageIndex);
+  if (visibleAITranslations.has(key)) visibleAITranslations.delete(key);
+  else visibleAITranslations.add(key);
+  renderAI();
+}
+
 function stopAITextSpeech(shouldRender = true) {
   if ("speechSynthesis" in window && aiTextSpeech.utterance) speechSynthesis.cancel();
   if (aiTextSpeech.audio) {
@@ -2719,67 +2748,33 @@ function naturalSpeechEnabled() {
   return Boolean(deviceAIConfig.apiKey && deviceAIConfig.speechVoice && deviceAIConfig.speechVoice !== "system");
 }
 
-function voiceAudioBlobFromBase64(base64, fallbackSampleRate = 22050) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  const isWav = binary.length >= 12 && binary.slice(0, 4) === "RIFF" && binary.slice(8, 12) === "WAVE";
-  if (isWav) return new Blob([bytes], { type: "audio/wav" });
-
-  const sampleRate = fallbackSampleRate;
-  const buffer = new ArrayBuffer(44 + binary.length);
-  const view = new DataView(buffer);
-  const writeAscii = (offset, value) => {
-    for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
-  };
-  writeAscii(0, "RIFF");
-  view.setUint32(4, 36 + binary.length, true);
-  writeAscii(8, "WAVE");
-  writeAscii(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeAscii(36, "data");
-  view.setUint32(40, binary.length, true);
-  new Uint8Array(buffer, 44).set(bytes);
-  return new Blob([buffer], { type: "audio/wav" });
-}
-
 async function requestNaturalSpeech(text) {
   if (!naturalSpeechEnabled()) throw new Error("自然朗读尚未启用。" );
-  const accent = state.settings.accent === "en-GB" ? "British" : "American";
   const content = String(text || "").trim().slice(0, 900);
-  const response = await fetch(ZHIPU_CHAT_URL, {
+  const response = await fetch(ZHIPU_TTS_URL, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${deviceAIConfig.apiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: "glm-4-voice",
-      messages: [{
-        role: "user",
-        content: [{
-          type: "text",
-          text: `Read only the following text in a natural, warm and clear ${accent} English tutor voice. Use a learner-friendly pace and add no commentary:\n${content}`
-        }]
-      }],
-      stream: false
+      model: "glm-tts",
+      input: content,
+      voice: "female",
+      speed: 0.88,
+      volume: 1,
+      response_format: "wav"
     })
   });
-  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
     if ([401, 403].includes(response.status)) throw new Error("智谱 API Key 无效或没有自然朗读权限。" );
     if (response.status === 429) throw new Error("智谱自然朗读额度不足或请求过多。" );
     throw new Error(data?.error?.message || `自然朗读生成失败（${response.status}）。`);
   }
-  const audioBase64 = String(data?.choices?.[0]?.message?.audio?.data || "");
-  if (!audioBase64) throw new Error("智谱没有返回有效音频。" );
-  return voiceAudioBlobFromBase64(audioBase64);
+  const blob = await response.blob();
+  if (!blob.size) throw new Error("智谱没有返回有效音频。" );
+  return blob.type === "audio/wav" ? blob : new Blob([blob], { type: "audio/wav" });
 }
 
 function speakTextWithSystem(text, messageIndex) {
@@ -2970,7 +2965,9 @@ function buildTutorInstructions(scenario) {
 
 Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. Correct only the one or two mistakes that matter most. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
 
-Return only a valid JSON object with this shape: {"reply":"English reply","feedback":[{"original":"learner wording","correction":"natural correction","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. Use empty arrays when there is nothing useful to add. Include at most two feedback items and two vocabulary items.`;
+The app supports voice: it displays your English reply and a separate text-to-speech service reads that exact reply aloud. Never claim that you are text-only, that the app has no voice, or that spoken output is a separate answer. If asked about voice, explain this accurately and briefly.
+
+Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"learner wording","correction":"natural correction","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Use empty arrays when there is nothing useful to add. Include at most two feedback items and two vocabulary items.`;
 }
 
 function parseDirectTutorReply(text) {
@@ -2979,11 +2976,12 @@ function parseDirectTutorReply(text) {
     const parsed = JSON.parse(cleaned);
     return {
       reply: typeof parsed.reply === "string" ? parsed.reply.trim() : "",
+      translation: typeof parsed.translation === "string" ? parsed.translation.trim() : "",
       feedback: Array.isArray(parsed.feedback) ? parsed.feedback.slice(0, 2) : [],
       vocabulary: Array.isArray(parsed.vocabulary) ? parsed.vocabulary.slice(0, 2) : []
     };
   } catch {
-    return { reply: cleaned, feedback: [], vocabulary: [] };
+    return { reply: cleaned, translation: "", feedback: [], vocabulary: [] };
   }
 }
 
@@ -3065,6 +3063,7 @@ async function submitVoiceTurn(content) {
     messages.push({
       role: "assistant",
       content: reply,
+      translation: String(result.translation || ""),
       feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 2) : [],
       vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.slice(0, 2) : [],
       createdAt: new Date().toISOString()
@@ -3162,6 +3161,7 @@ async function sendAIMessage(event) {
     messages.push({
       role: "assistant",
       content: String(result.reply || "Let’s try another way. Could you tell me a little more?"),
+      translation: String(result.translation || ""),
       feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 2) : [],
       vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.slice(0, 2) : [],
       createdAt: new Date().toISOString()
@@ -3248,7 +3248,7 @@ function renderDeviceAISettings() {
   $("span", pill).textContent = configured ? "此设备已保存" : "尚未配置";
   $("#deviceAIModelSelect").value = deviceAIConfig.model || DEFAULT_ZHIPU_MODEL;
   $("#deviceAISpeechInputSelect").value = deviceAIConfig.speechInput || "glm-asr";
-  $("#deviceAIVoiceSelect").value = deviceAIConfig.speechVoice || "glm-4-voice";
+  $("#deviceAIVoiceSelect").value = deviceAIConfig.speechVoice || "glm-tts";
   $("#deviceAIKeyInput").placeholder = configured ? "已保存；如不修改可留空" : "只保存在这台设备的浏览器中";
   $("#clearDeviceAI").disabled = !configured;
 }
@@ -3261,7 +3261,7 @@ async function configureDeviceAI() {
     apiKey,
     model: $("#deviceAIModelSelect").value || DEFAULT_ZHIPU_MODEL,
     speechInput: $("#deviceAISpeechInputSelect").value || "glm-asr",
-    speechVoice: $("#deviceAIVoiceSelect").value || "glm-4-voice"
+    speechVoice: $("#deviceAIVoiceSelect").value || "glm-tts"
   };
   saveDeviceAIConfig();
   input.value = "";
@@ -3499,7 +3499,16 @@ function bindEvents() {
   $("#aiReset").addEventListener("click", resetAIConversation);
   $("#aiMessages").addEventListener("click", (event) => {
     const button = event.target.closest("[data-ai-speak-index]");
-    if (button) void toggleAITextSpeech(Number(button.dataset.aiSpeakIndex));
+    if (button) {
+      void toggleAITextSpeech(Number(button.dataset.aiSpeakIndex));
+      return;
+    }
+    const translationButton = event.target.closest("[data-ai-translation-index]");
+    if (translationButton) toggleAITranslation(Number(translationButton.dataset.aiTranslationIndex));
+  });
+  $("#aiVoiceTranslationToggle").addEventListener("click", (event) => {
+    const index = Number(event.currentTarget.dataset.aiTranslationIndex);
+    if (Number.isInteger(index)) toggleAITranslation(index);
   });
   $("#aiDictation").addEventListener("click", toggleTextDictation);
   $("#aiVoiceToggle").addEventListener("click", toggleVoiceConversation);
@@ -3651,7 +3660,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=36", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=37", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

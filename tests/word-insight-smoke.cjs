@@ -14,8 +14,7 @@ source = source.replace(/init\(\);\s*$/, `
       exists: Boolean(word),
       derivatives: insight?.derivatives.map((item) => item.word) || [],
       affixes: insight?.affixes.map((item) => item.label) || [],
-      roots: insight?.roots.map((item) => item.label) || [],
-      mnemonic: insight?.mnemonic || ""
+      roots: insight?.roots.map((item) => item.label) || []
     };
   });
 `);
@@ -52,6 +51,5 @@ if (!byName.create.exists || !byName.inform.exists) throw new Error("Expected sm
 if (!byName.transport.affixes.includes("trans-")) throw new Error("transport should expose trans-");
 if (!byName.transport.roots.includes("port")) throw new Error("transport should expose port");
 if (byName.transport.derivatives[0] !== "port") throw new Error("A direct family base should rank before sibling words");
-if (byName.create.mnemonic.length < 20) throw new Error("create should receive a mnemonic");
 
 console.log(JSON.stringify(context.__results, null, 2));

@@ -250,6 +250,7 @@ function parseTutorReply(text) {
     const result = JSON.parse(start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned);
     return {
       reply: String(result.reply || "").slice(0, 1200),
+      translation: String(result.translation || "").slice(0, 1200),
       feedback: Array.isArray(result.feedback) ? result.feedback.map((item) => ({
         original: String(item?.original || "").slice(0, 300),
         correction: String(item?.correction || "").slice(0, 300),
@@ -262,7 +263,7 @@ function parseTutorReply(text) {
       })).filter((item) => item.word).slice(0, 2) : []
     };
   } catch {
-    return { reply: cleaned.slice(0, 1200), feedback: [], vocabulary: [] };
+    return { reply: cleaned.slice(0, 1200), translation: "", feedback: [], vocabulary: [] };
   }
 }
 
@@ -343,7 +344,9 @@ async function handleAIChat(request, response) {
 
 Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. Correct only the one or two mistakes that matter most. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
 
-Return only a valid JSON object with this shape: {"reply":"English reply","feedback":[{"original":"learner wording","correction":"natural correction","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. Use empty arrays when there is nothing useful to add. Include at most two feedback items and two vocabulary items.`;
+The app supports voice: it displays your English reply and a separate text-to-speech service reads that exact reply aloud. Never claim that you are text-only, that the app has no voice, or that spoken output is a separate answer. If asked about voice, explain this accurately and briefly.
+
+Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"learner wording","correction":"natural correction","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Use empty arrays when there is nothing useful to add. Include at most two feedback items and two vocabulary items.`;
 
   const messages = [{ role: "system", content: instructions }, ...history, { role: "user", content: message }];
   const failures = [];

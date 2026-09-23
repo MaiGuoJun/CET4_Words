@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=36" />
+    <link rel="stylesheet" href="./styles.css?v=37" />
   </head>
   <body>
     <div class="app-shell">
@@ -160,11 +160,10 @@
                 </div>
                 <section class="word-tools" id="wordTools" aria-label="单词拓展">
                   <div class="word-tool-tabs" id="wordToolTabs" role="tablist" aria-label="单词拓展功能">
-                    <button type="button" role="tab" data-word-tool="similar" aria-selected="false">相近词</button>
+                    <button type="button" role="tab" data-word-tool="similar" aria-selected="true" class="active">相近词</button>
                     <button type="button" role="tab" data-word-tool="derivatives" aria-selected="false">派生词</button>
                     <button type="button" role="tab" data-word-tool="affixes" aria-selected="false">词缀</button>
                     <button type="button" role="tab" data-word-tool="roots" aria-selected="false">词根</button>
-                    <button type="button" role="tab" data-word-tool="mnemonic" aria-selected="true" class="active">助记</button>
                   </div>
                   <div class="word-tool-content" id="wordToolContent" role="tabpanel" aria-live="polite"></div>
                 </section>
@@ -279,6 +278,8 @@
                 <div class="ai-voice-transcript" id="aiVoiceTranscript" aria-live="polite">
                   <span>实时文字提示</span>
                   <p>开始后，这里会显示识别到的话和 AI 的英文回复。</p>
+                  <button class="ai-translation-toggle" type="button" id="aiVoiceTranslationToggle" hidden>显示翻译</button>
+                  <p class="ai-voice-translation" id="aiVoiceTranslation" hidden></p>
                 </div>
                 <button class="button primary ai-voice-toggle" type="button" id="aiVoiceToggle">开始语音练习</button>
                 <p class="ai-voice-privacy">AI 回答由当前已连接的服务生成。语音识别由浏览器提供，部分浏览器可能联网完成识别；本应用不会保存录音。</p>
@@ -340,10 +341,10 @@
                 <label class="field"><span>智谱 API Key</span><input id="deviceAIKeyInput" type="password" autocomplete="new-password" spellcheck="false" placeholder="只保存在这台设备的浏览器中"/></label>
                 <label class="field"><span>模型</span><select id="deviceAIModelSelect"><option value="glm-5.3-flash">GLM-5.3-Flash</option><option value="glm-5.3-flashx">GLM-5.3-FlashX</option></select></label>
                 <label class="field"><span>语音输入</span><select id="deviceAISpeechInputSelect"><option value="glm-asr">智谱云识别 · 稳定</option><option value="browser">浏览器识别 · 免费</option></select></label>
-                <label class="field"><span>AI 回复朗读</span><select id="deviceAIVoiceSelect"><option value="glm-4-voice">GLM-4-Voice · 真人感英语</option><option value="system">设备系统声音 · 免费</option></select></label>
+                <label class="field"><span>AI 回复朗读</span><select id="deviceAIVoiceSelect"><option value="glm-tts">GLM-TTS · 原文自然朗读</option><option value="system">设备系统声音 · 免费</option></select></label>
               </div>
               <div class="data-actions sync-actions"><button class="button primary" type="button" id="saveDeviceAI">保存到此设备</button><button class="button ghost" type="button" id="clearDeviceAI">移除密钥</button></div>
-              <p class="sync-note">云识别会临时上传录音，官方价约 0.0002 元/秒；真人感朗读使用 GLM-4-Voice，计入通用 Token 包。两项都可切回免费的设备方案。密钥不会进入学习记录、同步、备份或 GitHub。</p>
+              <p class="sync-note">云识别会临时上传录音；自然朗读使用 GLM-TTS，严格朗读屏幕上的英文回复。两项都会使用智谱额度，也可切回免费的设备方案。密钥不会进入学习记录、同步、备份或 GitHub。</p>
             </section>
 
             <section class="card settings-section wide">
@@ -429,6 +430,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=36" defer></script>
+    <script src="./app.js?v=37" defer></script>
   </body>
 </html>
