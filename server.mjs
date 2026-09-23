@@ -255,7 +255,7 @@ function parseTutorReply(text) {
         original: String(item?.original || "").slice(0, 300),
         correction: String(item?.correction || "").slice(0, 300),
         reason: String(item?.reason || "").slice(0, 300)
-      })).filter((item) => item.correction).slice(0, 2) : [],
+      })).filter((item) => item.correction).slice(0, 8) : [],
       vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.map((item) => ({
         word: String(item?.word || "").slice(0, 80),
         meaning: String(item?.meaning || "").slice(0, 160),
@@ -267,7 +267,30 @@ function parseTutorReply(text) {
   }
 }
 
-async function requestZhipu(messages) {
+function parseWritingReview(text) {
+  const cleaned = String(text || "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  try {
+    const result = JSON.parse(start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned);
+    return {
+      score: Math.max(0, Math.min(100, Number(result.score) || 0)),
+      summary: String(result.summary || "").slice(0, 1200),
+      corrected: String(result.corrected || "").slice(0, 8000),
+      corrections: Array.isArray(result.corrections) ? result.corrections.map((item) => ({
+        original: String(item?.original || "").slice(0, 500),
+        correction: String(item?.correction || "").slice(0, 500),
+        reason: String(item?.reason || "").slice(0, 500)
+      })).filter((item) => item.correction).slice(0, 12) : [],
+      strengths: Array.isArray(result.strengths) ? result.strengths.map((item) => String(item).slice(0, 300)).slice(0, 5) : [],
+      advice: Array.isArray(result.advice) ? result.advice.map((item) => String(item).slice(0, 300)).slice(0, 5) : []
+    };
+  } catch {
+    throw new Error("INVALID_WRITING_REVIEW");
+  }
+}
+
+async function requestZhipu(messages, maxTokens = 2048) {
   const upstream = await fetch(`${ZHIPU_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -282,7 +305,7 @@ async function requestZhipu(messages) {
       response_format: { type: "json_object" },
       temperature: 1,
       top_p: 0.95,
-      max_tokens: 2048
+      max_tokens: maxTokens
     }),
     signal: AbortSignal.timeout(60000)
   });
@@ -300,7 +323,7 @@ async function requestZhipu(messages) {
   return { content, provider: "zhipu", model: String(data?.model || ZHIPU_MODEL) };
 }
 
-async function requestOllama(messages) {
+async function requestOllama(messages, numPredict = 360) {
   const upstream = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -311,7 +334,7 @@ async function requestOllama(messages) {
       think: false,
       format: "json",
       keep_alive: "10m",
-      options: { temperature: 0.55, num_predict: 360 }
+      options: { temperature: 0.55, num_predict: numPredict }
     }),
     signal: AbortSignal.timeout(120000)
   });
@@ -331,6 +354,32 @@ async function handleAIChat(request, response) {
     return json(response, error.message === "PAYLOAD_TOO_LARGE" ? 413 : 400, { error: "对话内容格式不正确或过长。" });
   }
 
+  if (body.task === "writing") {
+    const type = body.type === "translation" ? "translation" : "essay";
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim().slice(0, 2000) : "";
+    const submission = typeof body.text === "string" ? body.text.trim() : "";
+    if (!submission || submission.length > 6000) return json(response, 400, { error: "请提交 1–6000 个字符的英文答案。" });
+    if (type === "translation" && !prompt) return json(response, 400, { error: "段落翻译需要同时提供中文原文。" });
+    const taskName = type === "translation" ? "CET-4 Chinese-to-English paragraph translation" : "CET-4 English essay";
+    const instructions = `You are an exacting but constructive CET-4 examiner reviewing a ${taskName} for a Chinese learner aiming for 500+. Score the submitted English from 0 to 100 using task fulfillment/accuracy, organization, vocabulary, grammar and mechanics. Do not inflate the score. Preserve intended meaning while producing a complete corrected version. Explain errors in concise Chinese. For translation, compare against the supplied Chinese source and flag omissions or invented information. For an essay, use the supplied prompt if present. Return only valid JSON: {"score":0,"summary":"Chinese overall assessment","corrected":"complete corrected English","corrections":[{"original":"exact excerpt","correction":"improved excerpt","reason":"Chinese reason"}],"strengths":["Chinese strength"],"advice":["specific next step"]}. Include up to 12 important corrections and up to 5 strengths/advice items.`;
+    const messages = [{ role: "system", content: instructions }, { role: "user", content: `Task/source:\n${prompt || "(not supplied)"}\n\nLearner submission:\n${submission}` }];
+    const failures = [];
+    try {
+      let completion;
+      if (ZHIPU_API_KEY) {
+        try { completion = await requestZhipu(messages, 4096); }
+        catch (error) { failures.push(error); }
+      }
+      if (!completion) completion = await requestOllama(messages, 1400);
+      const result = parseWritingReview(completion.content);
+      return json(response, 200, { ...result, provider: completion.provider, model: completion.model });
+    } catch (error) {
+      failures.push(error);
+      console.error("Writing review failed:", failures.map((item) => item.message).join(", "));
+      return json(response, 502, { error: "AI 暂时没有完成批改，请稍后重试。" });
+    }
+  }
+
   const message = typeof body.message === "string" ? body.message.trim() : "";
   const scenario = SCENARIOS[body.scenario] ? body.scenario : "campus";
   if (!message || message.length > 1000) return json(response, 400, { error: "请输入 1–1000 个字符后再发送。" });
@@ -342,11 +391,11 @@ async function handleAIChat(request, response) {
 
   const instructions = `You are the private English tutor inside 蘑菇酱四级 for one Chinese learner preparing for CET-4 and aiming for 500+. The learner is around B1 and wants practical conversation plus gentle correction. The current scenario is ${SCENARIOS[scenario]}.
 
-Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. Correct only the one or two mistakes that matter most. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
+Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
 
 The app supports voice: it displays your English reply and a separate text-to-speech service reads that exact reply aloud. Never claim that you are text-only, that the app has no voice, or that spoken output is a separate answer. If asked about voice, explain this accurately and briefly.
 
-Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"learner wording","correction":"natural correction","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Use empty arrays when there is nothing useful to add. Include at most two feedback items and two vocabulary items.`;
+Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. For every complete sentence in the learner's message, include one feedback item in the same order. If a sentence is already natural, repeat it as the correction and use "表达自然，无需修改" as the reason. Include at most eight feedback items and two vocabulary items.`;
 
   const messages = [{ role: "system", content: instructions }, ...history, { role: "user", content: message }];
   const failures = [];

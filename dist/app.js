@@ -131,7 +131,7 @@ const AI_SCENARIOS = {
   }
 };
 
-const defaultAIState = () => ({ scenario: "campus", mode: "text", sessions: {} });
+const defaultAIState = () => ({ scenario: "campus", mode: "text", sessions: {}, writingReviews: [] });
 const defaultVocabAssessment = () => ({
   status: "idle",
   version: 1,
@@ -157,6 +157,8 @@ const defaultState = () => ({
     presumedKnown: 3000
   },
   wordStates: {},
+  listeningWordStates: {},
+  listeningProgress: {},
   daily: {},
   completedListening: [],
   ai: defaultAIState(),
@@ -187,6 +189,7 @@ let currentTrack = null;
 let objectAudioUrl = null;
 let loopA = null;
 let loopB = null;
+let dictationState = { sentences: [], index: 0, result: null };
 const pronunciationCache = new Map();
 const pronunciationAssetCache = new Map();
 let pronunciationAudio = null;
@@ -199,6 +202,7 @@ let aiServiceInfo = null;
 let aiBackendAvailable = false;
 let deviceAIConfig = loadDeviceAIConfig();
 let aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: false, messageIndex: null };
+let shadowingState = { messageIndex: null, status: "idle", recognition: null, mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", score: null, error: "" };
 const visibleAITranslations = new Set();
 let voiceSession = {
   state: "idle",
@@ -259,12 +263,15 @@ function normalizeState(parsed) {
     ...parsed,
     settings: { ...base.settings, ...(parsed.settings || {}) },
     wordStates: parsed.wordStates && typeof parsed.wordStates === "object" ? parsed.wordStates : {},
+    listeningWordStates: parsed.listeningWordStates && typeof parsed.listeningWordStates === "object" ? parsed.listeningWordStates : {},
+    listeningProgress: parsed.listeningProgress && typeof parsed.listeningProgress === "object" ? parsed.listeningProgress : {},
     daily: parsed.daily && typeof parsed.daily === "object" ? parsed.daily : {},
     completedListening: Array.isArray(parsed.completedListening) ? parsed.completedListening : [],
     ai: {
       ...base.ai,
       ...(parsed.ai || {}),
-      sessions: { ...(parsed.ai?.sessions || {}) }
+      sessions: { ...(parsed.ai?.sessions || {}) },
+      writingReviews: Array.isArray(parsed.ai?.writingReviews) ? parsed.ai.writingReviews : []
     },
     vocabAssessment: {
       ...base.vocabAssessment,
@@ -344,7 +351,7 @@ function normalizeSyncEndpoint(value) {
 }
 
 function itemTimestamp(item) {
-  return Math.max(...[item?.lastReviewedAt, item?.learnedAt, item?.screenedAt, item?.completedAt]
+  return Math.max(...[item?.updatedAt, item?.lastReviewedAt, item?.learnedAt, item?.screenedAt, item?.completedAt]
     .map((value) => Date.parse(value || "") || 0));
 }
 
@@ -365,6 +372,24 @@ function mergeCloudStates(localState, remoteState) {
     if (!localItem) wordStates[word] = remoteItem;
     else if (!remoteItem) wordStates[word] = localItem;
     else wordStates[word] = itemTimestamp(localItem) >= itemTimestamp(remoteItem) ? localItem : remoteItem;
+  }
+
+  const listeningWordStates = {};
+  for (const word of new Set([...Object.keys(remote.listeningWordStates), ...Object.keys(local.listeningWordStates)])) {
+    const localItem = local.listeningWordStates[word];
+    const remoteItem = remote.listeningWordStates[word];
+    if (!localItem) listeningWordStates[word] = remoteItem;
+    else if (!remoteItem) listeningWordStates[word] = localItem;
+    else listeningWordStates[word] = itemTimestamp(localItem) >= itemTimestamp(remoteItem) ? localItem : remoteItem;
+  }
+
+  const listeningProgress = {};
+  for (const trackId of new Set([...Object.keys(remote.listeningProgress), ...Object.keys(local.listeningProgress)])) {
+    const localItem = local.listeningProgress[trackId];
+    const remoteItem = remote.listeningProgress[trackId];
+    if (!localItem) listeningProgress[trackId] = remoteItem;
+    else if (!remoteItem) listeningProgress[trackId] = localItem;
+    else listeningProgress[trackId] = itemTimestamp(localItem) >= itemTimestamp(remoteItem) ? localItem : remoteItem;
   }
 
   const daily = {};
@@ -393,6 +418,8 @@ function mergeCloudStates(localState, remoteState) {
     ...primary,
     settings: primary.settings,
     wordStates,
+    listeningWordStates,
+    listeningProgress,
     daily,
     completedListening: [...listening.values()],
     ai: primary.ai,
@@ -1376,22 +1403,42 @@ function revealCurrentWord() {
   stabilizeStudyWorkspace();
 }
 
+function applySRSReview(item, quality, date = localDateKey()) {
+  const next = item || {};
+  const score = Math.max(0, Math.min(5, Number(quality) || 0));
+  const previousEase = Math.max(1.3, Number(next.ease) || 2.5);
+  let repetitions = Math.max(0, Number(next.repetitions ?? next.reviewStep) || 0);
+  let interval = Math.max(0, Number(next.interval) || ({ known: 3, fuzzy: 1, unknown: 0 }[next.status] || 0));
+  if (score < 3) {
+    repetitions = 0;
+    interval = score <= 1 ? 0 : 1;
+  } else {
+    repetitions += 1;
+    interval = repetitions === 1 ? 1 : repetitions === 2 ? 6 : Math.max(1, Math.round(interval * previousEase));
+  }
+  const ease = Math.max(1.3, previousEase + (0.1 - (5 - score) * (0.08 + (5 - score) * 0.02)));
+  next.ease = Math.round(ease * 100) / 100;
+  next.repetitions = repetitions;
+  next.interval = interval;
+  next.reviewStep = repetitions;
+  next.due = addDays(date, interval);
+  next.lastReviewedAt = new Date().toISOString();
+  return next;
+}
+
 function rateCurrentWord(rating) {
   if (!currentWord) return;
   const date = localDateKey();
   const previous = getWordState(currentWord);
   const isFreshLearning = studyMode === "learn" && !previous?.learnedAt && (!previous || ["unknown", "fuzzy"].includes(previous.status));
-  const schedule = { unknown: 0, fuzzy: 1, known: 3 };
-  state.wordStates[currentWord.word] = {
+  const item = {
     ...(previous || {}),
     status: rating,
     screenedAt: previous?.screenedAt || new Date().toISOString(),
     learnedAt: studyMode === "learn" ? (previous?.learnedAt || new Date().toISOString()) : previous?.learnedAt,
-    due: addDays(date, schedule[rating]),
-    reviewStep: rating === "known" ? Math.max(1, previous?.reviewStep || 0) : 0,
-    audioVerified: previous?.audioVerified || false,
-    lastReviewedAt: new Date().toISOString()
+    audioVerified: previous?.audioVerified || false
   };
+  state.wordStates[currentWord.word] = applySRSReview(item, { unknown: 1, fuzzy: 3, known: 5 }[rating], date);
   if (studyMode === "screen") todayRecord().screened += 1;
   if (isFreshLearning) todayRecord().learned += 1;
   saveState();
@@ -1401,16 +1448,8 @@ function rateCurrentWord(rating) {
 }
 
 function reviewDueDate(item, correct) {
-  if (!correct) return localDateKey();
-  const statusIntervals = {
-    unknown: [0, 1, 3, 7],
-    fuzzy: [1, 3, 7, 14],
-    known: [3, 7, 14, 30]
-  };
-  const intervals = statusIntervals[item.status] || statusIntervals.fuzzy;
-  const step = Math.min((item.reviewStep || 0) + 1, intervals.length - 1);
-  item.reviewStep = step;
-  return addDays(localDateKey(), intervals[step]);
+  applySRSReview(item, correct ? 4 : 1);
+  return item.due;
 }
 
 function prepareQuiz() {
@@ -1490,7 +1529,6 @@ function answerQuiz(answer, button) {
   if (correct) todayRecord().quizCorrect += 1;
   const item = state.wordStates[currentQuiz.word.word] || { status: "fuzzy", reviewStep: 0 };
   item.due = reviewDueDate(item, correct);
-  item.lastReviewedAt = new Date().toISOString();
   if (currentQuiz.type === "audio" && correct) item.audioVerified = true;
   if (!correct) item.status = "unknown";
   state.wordStates[currentQuiz.word.word] = item;
@@ -2029,6 +2067,145 @@ function resetTimer() {
   renderTimer();
 }
 
+function splitTranscriptSentences(text) {
+  return (String(text || "").replace(/\s+/g, " ").match(/[^.!?。！？]+[.!?。！？]+|[^.!?。！？]+$/g) || [])
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length >= 8);
+}
+
+function normalizedEnglishWords(text) {
+  return (String(text || "").toLowerCase().match(/[a-z]+(?:'[a-z]+)?/g) || []).map((word) => word.replace(/^'+|'+$/g, ""));
+}
+
+function lcsLength(left, right) {
+  const previous = new Uint16Array(right.length + 1);
+  const current = new Uint16Array(right.length + 1);
+  for (let i = 1; i <= left.length; i += 1) {
+    for (let j = 1; j <= right.length; j += 1) current[j] = left[i - 1] === right[j - 1] ? previous[j - 1] + 1 : Math.max(previous[j], current[j - 1]);
+    previous.set(current);
+    current.fill(0);
+  }
+  return previous[right.length];
+}
+
+function scoreTextMatch(target, attempt) {
+  const expected = normalizedEnglishWords(target);
+  const actual = normalizedEnglishWords(attempt);
+  if (!expected.length) return { score: 0, matched: 0, expected, actual, missed: [] };
+  const matched = lcsLength(expected, actual);
+  const precision = actual.length ? matched / actual.length : 0;
+  const recall = matched / expected.length;
+  const score = Math.round((precision && recall ? (2 * precision * recall) / (precision + recall) : 0) * 100);
+  const remaining = [...actual];
+  const missed = expected.filter((word) => {
+    const index = remaining.indexOf(word);
+    if (index < 0) return true;
+    remaining.splice(index, 1);
+    return false;
+  });
+  return { score, matched, expected, actual, missed };
+}
+
+const LISTENING_STOPWORDS = new Set("the a an and or but of to in on at for from with is are was were be been being it this that these those i you he she we they my your his her our their do does did have has had can could will would should may might not no so as if then than there here what which who how when where why".split(" "));
+
+function addMissedListeningWords(wordsMissed) {
+  const now = new Date().toISOString();
+  [...new Set(wordsMissed)].filter((word) => word.length >= 3 && !LISTENING_STOPWORDS.has(word)).slice(0, 8).forEach((word) => {
+    const previous = state.listeningWordStates[word] || {};
+    state.listeningWordStates[word] = {
+      ...previous,
+      word,
+      sourceTrackId: currentTrack?.id || previous.sourceTrackId || "",
+      sourceTitle: currentTrack?.title || previous.sourceTitle || "听写材料",
+      misses: (Number(previous.misses) || 0) + 1,
+      due: localDateKey(),
+      learnedAt: previous.learnedAt || now,
+      lastReviewedAt: now
+    };
+  });
+}
+
+function dueListeningWords() {
+  const today = localDateKey();
+  return Object.values(state.listeningWordStates || {}).filter((item) => item?.word && (!item.due || item.due <= today)).sort((left, right) => (Date.parse(left.lastReviewedAt || 0) || 0) - (Date.parse(right.lastReviewedAt || 0) || 0));
+}
+
+function reviewListeningWord(word, heard) {
+  const item = state.listeningWordStates[word];
+  if (!item) return;
+  applySRSReview(item, heard ? 4 : 1);
+  item.attempts = (Number(item.attempts) || 0) + 1;
+  item.heardCount = (Number(item.heardCount) || 0) + Number(heard);
+  saveState();
+  renderListeningWordQueue();
+}
+
+function renderListeningWordQueue() {
+  const queue = dueListeningWords();
+  if (!$("#listeningWordQueue")) return;
+  $("#listeningDueCount").textContent = `${queue.length} 个到期`;
+  $("#listeningWordQueue").innerHTML = queue.length ? queue.slice(0, 5).map((item) => `
+    <div class="listening-word-item">
+      <div><strong>${escapeHtml(item.word)}</strong><small>${escapeHtml(item.sourceTitle || "听写材料")} · 漏听 ${Number(item.misses) || 1} 次</small></div>
+      <button type="button" data-listening-speak="${escapeHtml(item.word)}">▶ 听音</button>
+      <button type="button" data-listening-review="${escapeHtml(item.word)}" data-heard="false">没听出</button>
+      <button type="button" data-listening-review="${escapeHtml(item.word)}" data-heard="true">听出了</button>
+    </div>`).join("") : `<p class="empty-queue">当前没有到期听力词。完成逐句听写后，漏词会自动加入。</p>`;
+}
+
+function renderDictation() {
+  const sentences = dictationState.sentences;
+  const hasSentence = sentences.length > 0;
+  const index = Math.max(0, Math.min(dictationState.index, Math.max(0, sentences.length - 1)));
+  dictationState.index = index;
+  $("#dictationPosition").textContent = hasSentence ? `${index + 1} / ${sentences.length}` : "— / —";
+  $("#dictationPrev").disabled = !hasSentence || index === 0;
+  $("#dictationNext").disabled = !hasSentence || index >= sentences.length - 1;
+  $("#dictationInput").disabled = !hasSentence;
+  $("#dictationCheck").disabled = !hasSentence;
+  $("#dictationReveal").disabled = !hasSentence;
+  $("#dictationHint").textContent = hasSentence
+    ? "先盲听并用 A–B 循环定位当前句；检查后，漏掉的关键词会进入听力 SRS。"
+    : "这篇材料没有可拆分的原文；请导入带原文的音频。";
+  const result = $("#dictationResult");
+  if (!dictationState.result) {
+    result.hidden = true;
+    result.innerHTML = "";
+  } else {
+    result.hidden = false;
+    result.innerHTML = dictationState.result;
+  }
+}
+
+function moveDictation(direction) {
+  if (!dictationState.sentences.length) return;
+  dictationState.index = Math.max(0, Math.min(dictationState.sentences.length - 1, dictationState.index + direction));
+  dictationState.result = null;
+  $("#dictationInput").value = "";
+  if (currentTrack) {
+    state.listeningProgress[currentTrack.id] = { ...(state.listeningProgress[currentTrack.id] || {}), sentenceIndex: dictationState.index, updatedAt: new Date().toISOString() };
+    saveState();
+  }
+  renderDictation();
+  $("#dictationInput").focus();
+}
+
+function checkDictation(reveal = false) {
+  const target = dictationState.sentences[dictationState.index];
+  if (!target) return;
+  const attempt = $("#dictationInput").value.trim();
+  if (!attempt && !reveal) return toast("先输入你听到的句子");
+  const match = scoreTextMatch(target, attempt);
+  if (!reveal) {
+    addMissedListeningWords(match.missed);
+    if (currentTrack) state.listeningProgress[currentTrack.id] = { ...(state.listeningProgress[currentTrack.id] || {}), sentenceIndex: dictationState.index, lastScore: match.score, checked: (Number(state.listeningProgress[currentTrack.id]?.checked) || 0) + 1, updatedAt: new Date().toISOString() };
+    saveState();
+    renderListeningWordQueue();
+  }
+  dictationState.result = `<div class="dictation-score"><strong>${reveal ? "参考答案" : `${match.score} 分`}</strong><span>${reveal ? "先听后看效果更好" : match.score >= 85 ? "听得很完整" : match.score >= 60 ? "还有几个词需要再听" : "建议慢速循环这一句"}</span></div>${attempt ? `<p><b>你的听写</b>${escapeHtml(attempt)}</p>` : ""}<p><b>原句</b>${escapeHtml(target)}</p>${!reveal && match.missed.length ? `<p><b>可能漏词</b>${escapeHtml([...new Set(match.missed)].join(" · "))}</p>` : ""}`;
+  renderDictation();
+}
+
 function renderTrackList() {
   const list = $("#trackList");
   if (!listeningTracks.length) {
@@ -2037,7 +2214,8 @@ function renderTrackList() {
   }
   list.innerHTML = listeningTracks.map((track, index) => {
     const complete = state.completedListening.some((entry) => entry.trackId === track.id);
-    return `<button class="track-item ${currentTrack?.id === track.id ? "active" : ""}" type="button" data-track-id="${escapeHtml(track.id)}"><span class="track-number">${String(index + 1).padStart(2, "0")} ${complete ? "· 已完成" : ""}</span><strong>${escapeHtml(track.title)}</strong><small>${escapeHtml(track.duration || (track.local ? "本地材料" : "短篇精听"))}</small></button>`;
+    const type = track.materialType === "exam" ? "· 四级真题" : "";
+    return `<button class="track-item ${currentTrack?.id === track.id ? "active" : ""}" type="button" data-track-id="${escapeHtml(track.id)}"><span class="track-number">${String(index + 1).padStart(2, "0")} ${complete ? "· 已完成" : ""} ${type}</span><strong>${escapeHtml(track.title)}</strong><small>${escapeHtml(track.duration || (track.local ? "本地材料" : "短篇精听"))}</small></button>`;
   }).join("");
   if (!currentTrack && listeningTracks[0]) selectTrack(listeningTracks[0].id);
 }
@@ -2074,6 +2252,12 @@ async function selectTrack(id) {
   $("#transcriptToggle").textContent = "显示原文";
   $("#transcriptToggle").setAttribute("aria-expanded", "false");
   $("#loopStatus").textContent = "A–B 循环未设置";
+  const sentences = splitTranscriptSentences(track.transcript);
+  const savedIndex = Math.max(0, Math.min(Number(state.listeningProgress[track.id]?.sentenceIndex) || 0, Math.max(0, sentences.length - 1)));
+  dictationState = { sentences, index: savedIndex, result: null };
+  $("#dictationInput").value = "";
+  renderDictation();
+  renderListeningWordQueue();
   renderTrackList();
 }
 
@@ -2180,6 +2364,7 @@ async function importAudio(event) {
     id: `local-${Date.now()}`,
     title,
     transcript: $("#importTranscript").value.trim(),
+    materialType: $("#importTrackType").value === "exam" ? "exam" : "practice",
     source: "本地材料",
     byline: "只保存在当前设备",
     duration: "本地音频",
@@ -2202,8 +2387,9 @@ async function importAudio(event) {
 function ensureAIState() {
   if (!state.ai || typeof state.ai !== "object") state.ai = defaultAIState();
   if (!AI_SCENARIOS[state.ai.scenario]) state.ai.scenario = "campus";
-  if (!['text', 'voice'].includes(state.ai.mode)) state.ai.mode = "text";
+  if (!["text", "voice", "writing"].includes(state.ai.mode)) state.ai.mode = "text";
   if (!state.ai.sessions || typeof state.ai.sessions !== "object" || Array.isArray(state.ai.sessions)) state.ai.sessions = {};
+  if (!Array.isArray(state.ai.writingReviews)) state.ai.writingReviews = [];
 }
 
 function currentAISession() {
@@ -2229,14 +2415,45 @@ function currentAISession() {
 }
 
 function renderAIFeedback(feedback = []) {
-  const items = Array.isArray(feedback) ? feedback.slice(0, 2) : [];
+  const items = Array.isArray(feedback) ? feedback.slice(0, 8) : [];
   if (!items.length) return "";
-  return `<div class="ai-feedback">${items.map((item) => `
+  return `<div class="ai-feedback"><div class="ai-feedback-heading">逐句纠错</div>${items.map((item) => `
     <div class="ai-feedback-card">
-      ${item.original ? `<del>${escapeHtml(item.original)}</del>` : ""}
-      <strong>${escapeHtml(item.correction || "")}</strong>
-      <p>${escapeHtml(item.reason || "")}</p>
+      ${item.original ? `<p><span>原句</span><del>${escapeHtml(item.original)}</del></p>` : ""}
+      <p><span>修正</span><strong>${escapeHtml(item.correction || "")}</strong></p>
+      <p><span>原因</span>${escapeHtml(item.reason || "")}</p>
     </div>`).join("")}</div>`;
+}
+
+function renderShadowingResult(message, index) {
+  const active = shadowingState.messageIndex === index && shadowingState.status !== "idle";
+  if (active && ["starting", "recording", "processing"].includes(shadowingState.status)) {
+    const label = shadowingState.status === "recording" ? "正在录音，说完后点停止…" : shadowingState.status === "processing" ? "正在识别并评分…" : "正在启动麦克风…";
+    return `<div class="shadowing-result pending">${escapeHtml(label)}</div>`;
+  }
+  if (active && shadowingState.error) return `<div class="shadowing-result error">${escapeHtml(shadowingState.error)}</div>`;
+  const result = active && shadowingState.status === "complete" ? shadowingState : message?.shadowing;
+  if (!result) return "";
+  return `<div class="shadowing-result"><div><strong>${Number(result.score) || 0}</strong><span>识别匹配分</span></div><p><b>识别到：</b>${escapeHtml(result.recognized || "未识别到内容")}</p><small>这是文字识别匹配度，不等同于专业的音素、重音和语调评分。</small></div>`;
+}
+
+function renderWritingReview() {
+  const panel = $("#aiWritingResult");
+  if (!panel) return;
+  const review = state.ai.writingReviews[0];
+  if (!review) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  const corrections = Array.isArray(review.corrections) ? review.corrections.slice(0, 12) : [];
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="writing-score"><strong>${Math.max(0, Math.min(100, Number(review.score) || 0))}</strong><span>参考分 / 100</span><p>${escapeHtml(review.summary || "")}</p></div>
+    <section><h3>修改稿</h3><div class="corrected-writing">${escapeHtml(review.corrected || "")}</div></section>
+    ${corrections.length ? `<section><h3>逐项修改</h3><div class="writing-corrections">${corrections.map((item) => `<div><p><span>原文</span>${escapeHtml(item.original || "")}</p><p><span>修改</span>${escapeHtml(item.correction || "")}</p><p><span>原因</span>${escapeHtml(item.reason || "")}</p></div>`).join("")}</div></section>` : ""}
+    ${Array.isArray(review.strengths) && review.strengths.length ? `<section><h3>做得好的地方</h3><ul>${review.strengths.slice(0, 5).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section>` : ""}
+    ${Array.isArray(review.advice) && review.advice.length ? `<section><h3>下一步</h3><ul>${review.advice.slice(0, 5).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section>` : ""}`;
 }
 
 function renderAIVocabulary(vocabulary = []) {
@@ -2274,6 +2491,8 @@ function renderAI() {
   });
   $("#aiTextPanel").hidden = state.ai.mode !== "text";
   $("#aiVoicePanel").hidden = state.ai.mode !== "voice";
+  $("#aiWritingPanel").hidden = state.ai.mode !== "writing";
+  $("#aiReset").hidden = state.ai.mode === "writing";
 
   const status = $("#aiStatus");
   status.classList.toggle("ready", aiServiceStatus === "ready");
@@ -2290,11 +2509,11 @@ function renderAI() {
     <div class="ai-message ${message.role === "user" ? "user" : "assistant"} ${index === messages.length - 1 ? "latest" : ""}">
       <div class="ai-message-label-row">
         <div class="ai-message-label">${message.role === "user" ? "YOU" : "AI TUTOR"}</div>
-        ${message.role === "assistant" ? `<button class="ai-message-speak" type="button" data-ai-speak-index="${index}" aria-label="朗读这条 AI 回复" aria-pressed="${aiTextSpeech.messageIndex === index ? "true" : "false"}">${aiTextSpeech.messageIndex === index ? "■ 停止" : "▶ 朗读"}</button>` : ""}
+        ${message.role === "assistant" ? `<button class="ai-message-speak" type="button" data-ai-speak-index="${index}" aria-label="朗读这条 AI 回复" aria-pressed="${aiTextSpeech.messageIndex === index ? "true" : "false"}">${aiTextSpeech.messageIndex === index ? "■ 停止" : "▶ 朗读"}</button><button class="ai-message-speak" type="button" data-ai-shadow-index="${index}">${shadowingState.messageIndex === index && shadowingState.status === "recording" ? "■ 停止跟读" : "◉ 跟读"}</button>` : ""}
         ${message.role === "assistant" && message.translation ? `<button class="ai-translation-toggle" type="button" data-ai-translation-index="${index}" aria-expanded="${visibleAITranslations.has(aiTranslationKey(message, index))}">${visibleAITranslations.has(aiTranslationKey(message, index)) ? "隐藏翻译" : "显示翻译"}</button>` : ""}
       </div>
       <div class="ai-bubble">${escapeHtml(message.content || "")}</div>
-      ${message.role === "assistant" ? renderAITranslation(message, index) + renderAIFeedback(message.feedback) + renderAIVocabulary(message.vocabulary) : ""}
+      ${message.role === "assistant" ? renderAITranslation(message, index) + renderShadowingResult(message, index) + renderAIFeedback(message.feedback) + renderAIVocabulary(message.vocabulary) : ""}
     </div>`).join("") + (aiPending ? `
     <div class="ai-message assistant latest" aria-label="AI 正在回复">
       <div class="ai-message-label-row"><div class="ai-message-label">AI TUTOR</div></div>
@@ -2305,12 +2524,14 @@ function renderAI() {
   renderAITextSpeechButtons();
   renderTextDictation();
   renderVoiceUI();
+  renderWritingReview();
   requestAnimationFrame(() => { $("#aiMessages").scrollTop = $("#aiMessages").scrollHeight; });
 }
 
 function selectAIScenario(scenario) {
   if (!AI_SCENARIOS[scenario] || aiPending) return;
   if (isVoiceActive()) return toast("请先结束语音对话", "结束后再切换练习情景。" );
+  stopShadowing(true, false);
   stopAITextSpeech();
   if (textDictation.listening) stopTextDictation(true);
   state.ai.scenario = scenario;
@@ -2323,6 +2544,7 @@ function selectAIScenario(scenario) {
 function resetAIConversation() {
   if (isVoiceActive()) return toast("请先结束语音对话");
   if (textDictation.listening) stopTextDictation(true);
+  stopShadowing(true, false);
   stopAITextSpeech();
   const messages = currentAISession();
   if (messages.length > 1 && !window.confirm("重新开始会清空这个情景的对话记录，确认继续吗？")) return;
@@ -2410,8 +2632,9 @@ function failVoiceSession(message, hint = "请检查麦克风权限与 AI 配置
 }
 
 function setAIMode(mode) {
-  if (!["text", "voice"].includes(mode) || state.ai.mode === mode) return;
-  if (mode === "text" && isVoiceActive()) stopVoiceImmediately();
+  if (!["text", "voice", "writing"].includes(mode) || state.ai.mode === mode) return;
+  if (mode !== "voice" && isVoiceActive()) stopVoiceImmediately();
+  stopShadowing(true, false);
   if (mode === "voice") {
     if (textDictation.listening) stopTextDictation(true);
     stopAITextSpeech();
@@ -2711,6 +2934,139 @@ function toggleTextDictation() {
   else startTextDictation();
 }
 
+function finishShadowingScore(messageIndex, recognized) {
+  const message = currentAISession()[messageIndex];
+  if (!message || shadowingState.messageIndex !== messageIndex) return;
+  const result = scoreTextMatch(message.content, recognized);
+  shadowingState.status = "complete";
+  shadowingState.recognized = recognized;
+  shadowingState.score = result.score;
+  shadowingState.error = "";
+  message.shadowing = { score: result.score, recognized, createdAt: new Date().toISOString() };
+  saveState();
+  renderAI();
+}
+
+function stopShadowing(abort = false, shouldRender = true) {
+  clearTimeout(shadowingState.stopTimer);
+  shadowingState.stopTimer = null;
+  if (shadowingState.mediaRecorder) {
+    shadowingState.abortRecording = abort;
+    try { if (shadowingState.mediaRecorder.state !== "inactive") shadowingState.mediaRecorder.stop(); } catch {}
+  }
+  const recognition = shadowingState.recognition;
+  shadowingState.recognition = null;
+  try { abort ? recognition?.abort() : recognition?.stop(); } catch {}
+  if (abort) {
+    shadowingState.mediaStream?.getTracks().forEach((track) => track.stop());
+    shadowingState.mediaStream = null;
+    shadowingState.mediaRecorder = null;
+    shadowingState.status = "idle";
+    shadowingState.messageIndex = null;
+  }
+  if (shouldRender) renderAI();
+}
+
+async function finishCloudShadowing(recorder, chunks, messageIndex, aborted) {
+  if (shadowingState.mediaRecorder === recorder) shadowingState.mediaRecorder = null;
+  shadowingState.mediaStream?.getTracks().forEach((track) => track.stop());
+  shadowingState.mediaStream = null;
+  if (aborted) return;
+  shadowingState.status = "processing";
+  renderAI();
+  try {
+    const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    const wav = await convertRecordingToWav(recorded);
+    const recognized = await requestCloudTranscription(wav);
+    finishShadowingScore(messageIndex, recognized);
+  } catch (error) {
+    shadowingState.status = "error";
+    shadowingState.error = error.message || "跟读识别失败，请重试。";
+    renderAI();
+  }
+}
+
+async function startCloudShadowing(messageIndex) {
+  if (!navigator.mediaDevices?.getUserMedia || !("MediaRecorder" in window)) throw new Error("当前浏览器不支持录音，请使用最新版 Chrome 并允许麦克风。" );
+  shadowingState.status = "starting";
+  renderAI();
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const chunks = [];
+  shadowingState.mediaRecorder = recorder;
+  shadowingState.mediaStream = stream;
+  shadowingState.mediaChunks = chunks;
+  shadowingState.abortRecording = false;
+  shadowingState.status = "recording";
+  recorder.addEventListener("dataavailable", (event) => { if (event.data?.size) chunks.push(event.data); });
+  recorder.addEventListener("stop", () => {
+    const aborted = shadowingState.abortRecording;
+    shadowingState.abortRecording = false;
+    void finishCloudShadowing(recorder, chunks, messageIndex, aborted);
+  }, { once: true });
+  recorder.start(250);
+  shadowingState.stopTimer = window.setTimeout(() => stopShadowing(false), 25000);
+  renderAI();
+}
+
+function startBrowserShadowing(messageIndex) {
+  const Recognition = speechRecognitionConstructor();
+  if (!Recognition) throw new Error("当前浏览器不支持免费语音识别，请在设置中选择智谱云识别。" );
+  const recognition = new Recognition();
+  let finalText = "";
+  shadowingState.recognition = recognition;
+  shadowingState.status = "recording";
+  recognition.lang = state.settings.accent || "en-US";
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  recognition.addEventListener("result", (event) => {
+    let interim = "";
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      const text = event.results[index][0]?.transcript || "";
+      if (event.results[index].isFinal) finalText += ` ${text}`;
+      else interim += ` ${text}`;
+    }
+    shadowingState.recognized = `${finalText} ${interim}`.trim();
+    renderAI();
+  });
+  recognition.addEventListener("error", (event) => {
+    if (event.error === "aborted") return;
+    shadowingState.status = "error";
+    shadowingState.error = event.error === "not-allowed" ? "没有麦克风权限，请在网站设置中允许。" : "没有识别到清晰跟读，请再试一次。";
+    renderAI();
+  });
+  recognition.addEventListener("end", () => {
+    if (shadowingState.recognition === recognition) shadowingState.recognition = null;
+    if (shadowingState.status !== "error") finishShadowingScore(messageIndex, finalText.trim() || shadowingState.recognized);
+  });
+  recognition.start();
+  renderAI();
+}
+
+function toggleShadowing(messageIndex) {
+  if (shadowingState.messageIndex === messageIndex && ["starting", "recording", "processing"].includes(shadowingState.status)) {
+    stopShadowing(false);
+    return;
+  }
+  stopAITextSpeech();
+  if (textDictation.listening) stopTextDictation(true);
+  stopShadowing(true, false);
+  shadowingState = { ...shadowingState, messageIndex, status: "starting", recognized: "", score: null, error: "" };
+  try {
+    if (deviceAIConfig.apiKey && deviceAIConfig.speechInput === "glm-asr") void startCloudShadowing(messageIndex).catch((error) => {
+      shadowingState.status = "error";
+      shadowingState.error = error.message || "无法启动跟读录音。";
+      renderAI();
+    });
+    else startBrowserShadowing(messageIndex);
+  } catch (error) {
+    shadowingState.status = "error";
+    shadowingState.error = error.message || "无法启动跟读识别。";
+    renderAI();
+  }
+}
+
 function renderAITextSpeechButtons() {
   $$("[data-ai-speak-index]").forEach((button) => {
     const speaking = Number(button.dataset.aiSpeakIndex) === aiTextSpeech.messageIndex;
@@ -2959,15 +3315,114 @@ async function speakVoiceReply(text) {
   }
 }
 
+function buildWritingReviewInstructions(type) {
+  const task = type === "translation" ? "CET-4 Chinese-to-English paragraph translation" : "CET-4 English essay";
+  return `You are an exacting but constructive CET-4 examiner reviewing a ${task} for a Chinese learner aiming for 500+. Score the submitted English from 0 to 100 using task fulfillment/accuracy, organization, vocabulary, grammar and mechanics. Do not inflate the score. Preserve the learner's intended meaning and level while producing a complete corrected version. Explain errors in concise Chinese. For translation, compare against the supplied Chinese source and flag omissions or invented information. For an essay, use the supplied prompt if present.
+
+Return only valid JSON: {"score":0,"summary":"Chinese overall assessment","corrected":"complete corrected English","corrections":[{"original":"exact excerpt","correction":"improved excerpt","reason":"Chinese reason"}],"strengths":["Chinese strength"],"advice":["specific next step"]}. Include up to 12 important corrections and up to 5 strengths/advice items.`;
+}
+
+function parseWritingReview(text) {
+  const cleaned = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    const parsed = JSON.parse(cleaned.slice(cleaned.indexOf("{"), cleaned.lastIndexOf("}") + 1));
+    return {
+      score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
+      summary: String(parsed.summary || "").trim(),
+      corrected: String(parsed.corrected || "").trim(),
+      corrections: Array.isArray(parsed.corrections) ? parsed.corrections.slice(0, 12) : [],
+      strengths: Array.isArray(parsed.strengths) ? parsed.strengths.slice(0, 5).map(String) : [],
+      advice: Array.isArray(parsed.advice) ? parsed.advice.slice(0, 5).map(String) : []
+    };
+  } catch {
+    throw new Error("AI 返回的批改格式不完整，请再试一次。" );
+  }
+}
+
+async function requestDirectWritingReview({ type, prompt, text }) {
+  if (!deviceAIConfig.apiKey) throw new Error("请先在设置中保存智谱 API Key。" );
+  const response = await fetch(ZHIPU_CHAT_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${deviceAIConfig.apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: deviceAIConfig.model,
+      messages: [
+        { role: "system", content: buildWritingReviewInstructions(type) },
+        { role: "user", content: `Task/source:\n${prompt || "(not supplied)"}\n\nLearner submission:\n${text}` }
+      ],
+      stream: false,
+      thinking: { type: "enabled", clear_thinking: false },
+      response_format: { type: "json_object" },
+      temperature: 0.6,
+      top_p: 0.9,
+      max_tokens: 4096
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error?.message || `智谱批改失败（${response.status}）。`);
+  const raw = data?.choices?.[0]?.message?.content;
+  const content = Array.isArray(raw) ? raw.map((item) => typeof item === "string" ? item : String(item?.text || item?.content || "")).join("") : raw;
+  return { ...parseWritingReview(content), provider: "zhipu", model: String(data?.model || deviceAIConfig.model), transport: "direct" };
+}
+
+async function requestWritingReview(payload) {
+  let backendError = null;
+  if (aiBackendAvailable) {
+    try {
+      const response = await fetch("./api/ai-chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task: "writing", ...payload }) });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "AI 批改失败，请稍后重试。" );
+      return result;
+    } catch (error) { backendError = error; }
+  }
+  if (deviceAIConfig.apiKey) return requestDirectWritingReview(payload);
+  throw backendError || new Error("请先在设置中配置手机 AI，或在电脑上启动本机服务。" );
+}
+
+async function submitWritingReview() {
+  if (aiPending) return;
+  const type = $("#aiWritingType").value === "translation" ? "translation" : "essay";
+  const prompt = $("#aiWritingPrompt").value.trim();
+  const text = $("#aiWritingInput").value.trim();
+  if (!text) return toast("请先粘贴你的英文答案");
+  if (type === "translation" && !prompt) return toast("请粘贴中文原文", "有原文才能判断漏译和错译。" );
+  aiPending = true;
+  $("#aiWritingSubmit").disabled = true;
+  $("#aiWritingStatus").textContent = "AI 正在按四级标准批改，通常需要十几秒…";
+  try {
+    const result = await requestWritingReview({ type, prompt, text });
+    if (result.provider) aiServiceInfo = { provider: result.provider, model: result.model || "", transport: result.transport || "backend" };
+    state.ai.writingReviews.unshift({ ...result, type, prompt, original: text, createdAt: new Date().toISOString() });
+    state.ai.writingReviews = state.ai.writingReviews.slice(0, 10);
+    saveState();
+    $("#aiWritingStatus").textContent = "批改完成；参考分用于定位问题，不等同于正式阅卷分数。";
+    renderWritingReview();
+  } catch (error) {
+    $("#aiWritingStatus").textContent = error.message || "批改失败，请稍后再试。";
+    toast("AI 批改没有完成", $("#aiWritingStatus").textContent);
+  } finally {
+    aiPending = false;
+    $("#aiWritingSubmit").disabled = false;
+  }
+}
+
+function updateWritingLabels() {
+  const translation = $("#aiWritingType").value === "translation";
+  $("#aiWritingPromptLabel").textContent = translation ? "中文原文（必填）" : "作文题目（可选）";
+  $("#aiWritingInputLabel").textContent = translation ? "你的英文译文" : "你的英文作文";
+  $("#aiWritingPrompt").placeholder = translation ? "粘贴需要翻译的中文段落。" : "粘贴题目或写作要求，有题目时评分会更准确。";
+  $("#aiWritingInput").placeholder = translation ? "粘贴你的英文译文…" : "粘贴你的英文作文…";
+}
+
 function buildTutorInstructions(scenario) {
   const current = AI_SCENARIOS[scenario] || AI_SCENARIOS.campus;
   return `You are the private English tutor inside 蘑菇酱四级 for one Chinese learner preparing for CET-4 and aiming for 500+. The learner is around B1 and wants practical conversation plus gentle correction. The current scenario is ${current.title}: ${current.goal}
 
-Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. Correct only the one or two mistakes that matter most. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
+Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
 
 The app supports voice: it displays your English reply and a separate text-to-speech service reads that exact reply aloud. Never claim that you are text-only, that the app has no voice, or that spoken output is a separate answer. If asked about voice, explain this accurately and briefly.
 
-Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"learner wording","correction":"natural correction","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Use empty arrays when there is nothing useful to add. Include at most two feedback items and two vocabulary items.`;
+Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. For every complete sentence in the learner's message, include one feedback item in the same order. If a sentence is already natural, repeat it as the correction and use "表达自然，无需修改" as the reason. Include at most eight feedback items and two vocabulary items.`;
 }
 
 function parseDirectTutorReply(text) {
@@ -2977,7 +3432,7 @@ function parseDirectTutorReply(text) {
     return {
       reply: typeof parsed.reply === "string" ? parsed.reply.trim() : "",
       translation: typeof parsed.translation === "string" ? parsed.translation.trim() : "",
-      feedback: Array.isArray(parsed.feedback) ? parsed.feedback.slice(0, 2) : [],
+      feedback: Array.isArray(parsed.feedback) ? parsed.feedback.slice(0, 8) : [],
       vocabulary: Array.isArray(parsed.vocabulary) ? parsed.vocabulary.slice(0, 2) : []
     };
   } catch {
@@ -3064,7 +3519,7 @@ async function submitVoiceTurn(content) {
       role: "assistant",
       content: reply,
       translation: String(result.translation || ""),
-      feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 2) : [],
+      feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 8) : [],
       vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.slice(0, 2) : [],
       createdAt: new Date().toISOString()
     });
@@ -3162,7 +3617,7 @@ async function sendAIMessage(event) {
       role: "assistant",
       content: String(result.reply || "Let’s try another way. Could you tell me a little more?"),
       translation: String(result.translation || ""),
-      feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 2) : [],
+      feedback: Array.isArray(result.feedback) ? result.feedback.slice(0, 8) : [],
       vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary.slice(0, 2) : [],
       createdAt: new Date().toISOString()
     });
@@ -3399,6 +3854,7 @@ function bindEvents() {
     if (currentView === "ai" && button.dataset.viewTarget !== "ai") {
       if (isVoiceActive()) stopVoiceImmediately();
       if (textDictation.listening) stopTextDictation(true);
+      stopShadowing(true, false);
       stopAITextSpeech();
     }
     if (currentView === "today" && button.dataset.viewTarget !== "today") stopPronunciationAudio();
@@ -3490,6 +3946,16 @@ function bindEvents() {
     $("#transcriptToggle").textContent = transcript.hidden ? "显示原文" : "隐藏原文";
     $("#transcriptToggle").setAttribute("aria-expanded", transcript.hidden ? "false" : "true");
   });
+  $("#dictationPrev").addEventListener("click", () => moveDictation(-1));
+  $("#dictationNext").addEventListener("click", () => moveDictation(1));
+  $("#dictationCheck").addEventListener("click", () => checkDictation(false));
+  $("#dictationReveal").addEventListener("click", () => checkDictation(true));
+  $("#listeningWordQueue").addEventListener("click", (event) => {
+    const speakButton = event.target.closest("[data-listening-speak]");
+    if (speakButton) return void speak(speakButton.dataset.listeningSpeak, { notifyFallback: true });
+    const reviewButton = event.target.closest("[data-listening-review]");
+    if (reviewButton) reviewListeningWord(reviewButton.dataset.listeningReview, reviewButton.dataset.heard === "true");
+  });
   $("#completeListening").addEventListener("click", completeListening);
   $("#openImportAudio").addEventListener("click", () => $("#audioImportDialog").showModal());
   $("#audioImportForm").addEventListener("submit", importAudio);
@@ -3503,6 +3969,11 @@ function bindEvents() {
       void toggleAITextSpeech(Number(button.dataset.aiSpeakIndex));
       return;
     }
+    const shadowButton = event.target.closest("[data-ai-shadow-index]");
+    if (shadowButton) {
+      toggleShadowing(Number(shadowButton.dataset.aiShadowIndex));
+      return;
+    }
     const translationButton = event.target.closest("[data-ai-translation-index]");
     if (translationButton) toggleAITranslation(Number(translationButton.dataset.aiTranslationIndex));
   });
@@ -3512,6 +3983,8 @@ function bindEvents() {
   });
   $("#aiDictation").addEventListener("click", toggleTextDictation);
   $("#aiVoiceToggle").addEventListener("click", toggleVoiceConversation);
+  $("#aiWritingType").addEventListener("change", updateWritingLabels);
+  $("#aiWritingSubmit").addEventListener("click", () => { void submitWritingReview(); });
   $("#aiForm").addEventListener("submit", sendAIMessage);
   $("#aiInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -3554,7 +4027,7 @@ function bindEvents() {
       rateCurrentWord({ "1": "unknown", "2": "fuzzy", "3": "known" }[event.key]);
     }
   });
-  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopAITextSpeech(false); stopTextDictation(true); stopVoiceImmediately(false); persistState(); });
+  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopAITextSpeech(false); stopTextDictation(true); stopShadowing(true, false); stopVoiceImmediately(false); persistState(); });
   window.addEventListener("online", () => scheduleCloudSync(100));
   window.addEventListener("offline", () => setSyncStatus("offline", "当前离线，记录已安全保存在本机"));
   document.addEventListener("visibilitychange", () => {
@@ -3660,7 +4133,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=37", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=38", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

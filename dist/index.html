@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=37" />
+    <link rel="stylesheet" href="./styles.css?v=38" />
   </head>
   <body>
     <div class="app-shell">
@@ -187,7 +187,7 @@
 
         <section class="view" id="view-listening" data-view="listening" hidden>
           <div class="page-head">
-            <div><p class="eyebrow">LISTEN / 精听</p><h1>先听，再看见原文</h1></div>
+            <div><p class="eyebrow">LISTEN / 精听</p><h1>真题精听与逐句听写</h1></div>
             <button class="button secondary" type="button" id="openImportAudio">＋ 导入本地材料</button>
           </div>
 
@@ -215,6 +215,20 @@
                 <button class="transcript-toggle" type="button" id="transcriptToggle" aria-expanded="false">显示原文</button>
                 <div class="transcript" id="transcript" hidden></div>
               </div>
+              <section class="dictation-panel" id="dictationPanel">
+                <div class="dictation-head"><div><p class="card-kicker">SENTENCE DICTATION</p><h3>逐句听写</h3></div><span id="dictationPosition">— / —</span></div>
+                <p class="dictation-hint" id="dictationHint">选择一篇带原文的材料。用 A–B 循环定位这一句，听懂后再输入。</p>
+                <div class="dictation-navigation"><button type="button" id="dictationPrev">上一句</button><button type="button" id="dictationNext">下一句</button></div>
+                <label class="sr-only" for="dictationInput">输入听到的英文</label>
+                <textarea id="dictationInput" rows="3" maxlength="600" placeholder="在这里输入你听到的英文…"></textarea>
+                <div class="dictation-actions"><button class="button secondary" type="button" id="dictationReveal">显示答案</button><button class="button primary" type="button" id="dictationCheck">检查听写</button></div>
+                <div class="dictation-result" id="dictationResult" hidden></div>
+              </section>
+              <section class="listening-srs-panel">
+                <div class="dictation-head"><div><p class="card-kicker">LISTENING SRS</p><h3>听力词复习</h3></div><span id="listeningDueCount">0 个到期</span></div>
+                <p class="dictation-hint">听写漏掉的关键词会进入独立队列，不与看词背诵混在一起。</p>
+                <div class="listening-word-queue" id="listeningWordQueue"></div>
+              </section>
               <button class="button primary complete-listening" type="button" id="completeListening">完成本次精听</button>
             </article>
           </div>
@@ -252,6 +266,7 @@
               <div class="ai-mode-switch" role="tablist" aria-label="对话方式">
                 <button class="active" type="button" role="tab" aria-selected="true" data-ai-mode="text">文字对话</button>
                 <button type="button" role="tab" aria-selected="false" data-ai-mode="voice">语音对话</button>
+                <button type="button" role="tab" aria-selected="false" data-ai-mode="writing">作文 / 翻译批改</button>
               </div>
 
               <div class="ai-text-panel" id="aiTextPanel">
@@ -283,6 +298,16 @@
                 </div>
                 <button class="button primary ai-voice-toggle" type="button" id="aiVoiceToggle">开始语音练习</button>
                 <p class="ai-voice-privacy">AI 回答由当前已连接的服务生成。语音识别由浏览器提供，部分浏览器可能联网完成识别；本应用不会保存录音。</p>
+              </div>
+
+              <div class="ai-writing-panel" id="aiWritingPanel" hidden>
+                <div class="writing-form-grid">
+                  <label class="field"><span>批改类型</span><select id="aiWritingType"><option value="essay">四级作文</option><option value="translation">四级段落翻译</option></select></label>
+                  <label class="field"><span id="aiWritingPromptLabel">作文题目（可选）</span><textarea id="aiWritingPrompt" rows="3" maxlength="2000" placeholder="粘贴题目或写作要求，有题目时评分会更准确。"></textarea></label>
+                  <label class="field"><span id="aiWritingInputLabel">你的英文作文</span><textarea id="aiWritingInput" rows="10" maxlength="6000" placeholder="粘贴你的英文作文…"></textarea></label>
+                </div>
+                <div class="writing-submit-row"><p id="aiWritingStatus">按四级标准给出分数、逐项修改和下一步建议。</p><button class="button primary" type="button" id="aiWritingSubmit">开始批改</button></div>
+                <div class="writing-result" id="aiWritingResult" hidden></div>
               </div>
             </article>
           </div>
@@ -397,6 +422,7 @@
       <form method="dialog" class="dialog-card" id="audioImportForm">
         <div class="dialog-head"><div><p class="card-kicker">LOCAL MATERIAL</p><h2>导入本地听力</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
         <label class="field"><span>材料标题</span><input id="importTrackTitle" required maxlength="80" placeholder="例如：2025年12月四级长对话 1"/></label>
+        <label class="field"><span>材料类型</span><select id="importTrackType"><option value="exam">四级真题</option><option value="practice">日常练习</option></select></label>
         <label class="file-drop"><span>选择音频文件</span><small>支持浏览器可播放的 MP3、M4A、OGG 或 WAV</small><input id="importAudioFile" type="file" accept="audio/*" required/></label>
         <label class="field"><span>原文（可稍后补充）</span><textarea id="importTranscript" rows="8" placeholder="粘贴对应原文。材料只保存在当前设备。"></textarea></label>
         <div class="dialog-actions"><button class="button ghost" value="cancel">取消</button><button class="button primary" type="submit">保存到本机</button></div>
@@ -430,6 +456,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=37" defer></script>
+    <script src="./app.js?v=38" defer></script>
   </body>
 </html>
