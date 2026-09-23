@@ -172,6 +172,7 @@ let state = loadState();
 let words = [];
 let listeningTracks = [];
 let currentView = "today";
+let wordLibraryState = { status: "all", level: "all", query: "", page: 1, pageSize: 80 };
 let studyMode = "screen";
 let currentWordIndex = 0;
 let currentWord = null;
@@ -753,6 +754,7 @@ function renderNavigation() {
     if (button.classList.contains("nav-item")) active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
   });
   if (currentView === "progress") renderProgress();
+  if (currentView === "words") renderWordLibrary();
   if (currentView === "listening") renderTrackList();
   if (currentView === "ai") renderAI();
 }
@@ -4352,6 +4354,97 @@ function renderProgress() {
   $("#vocabBreakdown").innerHTML = rows.map(([label, value]) => `<div class="breakdown-row"><span>${label}</span><div class="breakdown-track"><i style="width:${words.length ? (value / words.length) * 100 : 0}%"></i></div><strong>${value}</strong></div>`).join("");
 }
 
+function wordLibraryStatus(word) {
+  const status = state.wordStates[word.word]?.status;
+  return ["known", "fuzzy", "unknown"].includes(status) ? status : "unlearned";
+}
+
+function wordLibraryFilteredWords() {
+  const query = wordLibraryState.query.trim().toLowerCase();
+  return words.filter((word) => {
+    const item = state.wordStates[word.word];
+    const status = wordLibraryStatus(word);
+    const statusMatch = wordLibraryState.status === "all"
+      || (wordLibraryState.status === "learned" ? Boolean(item?.learnedAt) : status === wordLibraryState.status);
+    if (!statusMatch) return false;
+    const isCET6 = Boolean(word.isCET6Supplement || word.level === "CET6");
+    if (wordLibraryState.level === "cet4" && isCET6) return false;
+    if (wordLibraryState.level === "cet6" && !isCET6) return false;
+    if (!query) return true;
+    const searchable = [word.word, word.phonetic, word.translation, word.brief, word.phrase, word.phraseMeaning]
+      .filter(Boolean).join(" ").toLowerCase();
+    return searchable.includes(query);
+  });
+}
+
+function shortLearningDate(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(date);
+}
+
+function renderWordLibrary() {
+  const list = $("#wordLibraryList");
+  if (!list) return;
+  const number = new Intl.NumberFormat("zh-CN");
+  const counts = stateCounts();
+  const learned = words.filter((word) => Boolean(state.wordStates[word.word]?.learnedAt)).length;
+  $("#wordLibraryTotal").textContent = number.format(words.length);
+  const summaries = [
+    ["全部", words.length, "all"],
+    ["已背过", learned, "learned"],
+    ["未学习", counts.unclassified, "unlearned"],
+    ["认识", counts.known, "known"],
+    ["模糊", counts.fuzzy, "fuzzy"],
+    ["不认识", counts.unknown, "unknown"]
+  ];
+  $("#wordLibrarySummary").innerHTML = summaries.map(([label, value, filter]) => `<button type="button" data-word-summary-filter="${filter}" class="${wordLibraryState.status === filter ? "active" : ""}"><span>${label}</span><strong>${number.format(value)}</strong></button>`).join("");
+  $("#wordLibrarySearch").value = wordLibraryState.query;
+  $("#wordLibraryLevel").value = wordLibraryState.level;
+  $$('[data-word-filter]').forEach((button) => button.classList.toggle("active", button.dataset.wordFilter === wordLibraryState.status));
+
+  const filtered = wordLibraryFilteredWords();
+  const totalPages = Math.max(1, Math.ceil(filtered.length / wordLibraryState.pageSize));
+  wordLibraryState.page = Math.min(Math.max(1, wordLibraryState.page), totalPages);
+  const start = (wordLibraryState.page - 1) * wordLibraryState.pageSize;
+  const pageWords = filtered.slice(start, start + wordLibraryState.pageSize);
+  $("#wordLibraryResultCount").textContent = `找到 ${number.format(filtered.length)} 个词${filtered.length ? ` · 显示 ${number.format(start + 1)}–${number.format(Math.min(start + wordLibraryState.pageSize, filtered.length))}` : ""}`;
+  $("#wordLibraryPage").textContent = `第 ${wordLibraryState.page} / ${totalPages} 页`;
+  $("#wordLibraryPrev").disabled = wordLibraryState.page <= 1;
+  $("#wordLibraryNext").disabled = wordLibraryState.page >= totalPages;
+
+  const statusLabels = { unlearned: "未学习", known: "认识", fuzzy: "模糊", unknown: "不认识" };
+  list.innerHTML = pageWords.length ? pageWords.map((word, offset) => {
+    const item = state.wordStates[word.word];
+    const status = wordLibraryStatus(word);
+    const senses = wordSenseRows(word).slice(0, 2);
+    const meaning = senses.map((sense) => `${sense.partOfSpeech || ""} ${sense.meaning}`.trim()).join("；");
+    const isCET6 = Boolean(word.isCET6Supplement || word.level === "CET6");
+    const reviewed = shortLearningDate(item?.lastReviewedAt || item?.learnedAt);
+    const learningMeta = item?.learnedAt ? `已背过${reviewed ? ` · 最近 ${reviewed}` : ""}` : item?.status ? "词测已判断" : "尚未开始";
+    return `<article class="word-library-row">
+      <span class="word-library-number">${number.format(start + offset + 1)}</span>
+      <div class="word-library-word"><strong>${escapeHtml(word.word)}</strong>${word.phonetic ? `<span>/${escapeHtml(String(word.phonetic).replace(/^\/?|\/?$/g, ""))}/</span>` : ""}</div>
+      <p class="word-library-meaning">${escapeHtml(meaning || word.translation || "暂无释义")}</p>
+      <div class="word-library-meta"><span class="word-level-chip ${isCET6 ? "cet6" : ""}">${isCET6 ? "六级补充" : "四级"}</span><span class="word-status-chip ${status}">${statusLabels[status]}</span><small>${escapeHtml(learningMeta)}</small></div>
+      <button class="word-library-speak" type="button" data-word-list-speak="${escapeHtml(word.word)}" aria-label="朗读 ${escapeHtml(word.word)}">▶</button>
+    </article>`;
+  }).join("") : `<div class="word-library-empty"><strong>没有找到符合条件的单词</strong><p>换个关键词，或选择“全部”再试试。</p></div>`;
+}
+
+function setWordLibraryFilter(status) {
+  if (!["all", "learned", "unlearned", "known", "fuzzy", "unknown"].includes(status)) return;
+  wordLibraryState.status = status;
+  wordLibraryState.page = 1;
+  renderWordLibrary();
+}
+
+function moveWordLibraryPage(amount) {
+  wordLibraryState.page += amount;
+  renderWordLibrary();
+  $(".word-library-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function renderSettings() {
   $("#examDateInput").value = state.settings.examDate;
   $("#scoreGoalInput").value = state.settings.scoreGoal;
@@ -4671,6 +4764,31 @@ function bindEvents() {
     }
   });
 
+  $("#wordLibrarySearch").addEventListener("input", (event) => {
+    wordLibraryState.query = event.target.value;
+    wordLibraryState.page = 1;
+    renderWordLibrary();
+  });
+  $("#wordLibraryLevel").addEventListener("change", (event) => {
+    wordLibraryState.level = event.target.value;
+    wordLibraryState.page = 1;
+    renderWordLibrary();
+  });
+  $("#wordLibraryFilters").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-word-filter]");
+    if (button) setWordLibraryFilter(button.dataset.wordFilter);
+  });
+  $("#wordLibrarySummary").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-word-summary-filter]");
+    if (button) setWordLibraryFilter(button.dataset.wordSummaryFilter);
+  });
+  $("#wordLibraryList").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-word-list-speak]");
+    if (button) void speak(button.dataset.wordListSpeak, { notifyFallback: true });
+  });
+  $("#wordLibraryPrev").addEventListener("click", () => moveWordLibraryPage(-1));
+  $("#wordLibraryNext").addEventListener("click", () => moveWordLibraryPage(1));
+
   $("#dailyTargetInput").addEventListener("input", (event) => {
     $("#settingsTargetOutput").textContent = event.target.value;
   });
@@ -4725,6 +4843,7 @@ function renderAll() {
   renderToday();
   renderTimer();
   renderAI();
+  renderWordLibrary();
   renderProgress();
   renderSettings();
   renderNavigation();
@@ -4811,7 +4930,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=42", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=43", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

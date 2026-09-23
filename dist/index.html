@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=42" />
+    <link rel="stylesheet" href="./styles.css?v=43" />
   </head>
   <body>
     <div class="app-shell">
@@ -34,17 +34,20 @@
           <button class="nav-item active" type="button" data-view-target="today" aria-current="page">
             <span class="nav-index">01</span><span>今日</span>
           </button>
+          <button class="nav-item" type="button" data-view-target="words">
+            <span class="nav-index">02</span><span>单词本</span>
+          </button>
           <button class="nav-item" type="button" data-view-target="listening">
-            <span class="nav-index">02</span><span>听力</span>
+            <span class="nav-index">03</span><span>听力</span>
           </button>
           <button class="nav-item" type="button" data-view-target="ai">
-            <span class="nav-index">03</span><span>AI 对话</span>
+            <span class="nav-index">04</span><span>AI 对话</span>
           </button>
           <button class="nav-item" type="button" data-view-target="progress">
-            <span class="nav-index">04</span><span>进度</span>
+            <span class="nav-index">05</span><span>进度</span>
           </button>
           <button class="nav-item" type="button" data-view-target="settings">
-            <span class="nav-index">05</span><span>设置</span>
+            <span class="nav-index">06</span><span>设置</span>
           </button>
         </nav>
 
@@ -185,6 +188,37 @@
             <article class="mini-card"><span class="mini-label">今日已学</span><strong id="learnedTodayStat">0</strong><small>个新词</small></article>
             <article class="mini-card accent"><span class="mini-label">今日专注</span><strong id="minutesTodayStat">0</strong><small>分钟</small></article>
           </div>
+        </section>
+
+        <section class="view" id="view-words" data-view="words" hidden>
+          <div class="page-head word-library-head">
+            <div><p class="eyebrow">VOCABULARY / 单词本</p><h1>全部 <span id="wordLibraryTotal">—</span> 个单词</h1></div>
+            <p class="word-library-intro">查看哪些已经背过，哪些仍未开始，并按认识程度快速筛选。</p>
+          </div>
+
+          <div class="word-library-summary" id="wordLibrarySummary" aria-label="单词状态统计"></div>
+
+          <article class="card word-library-card">
+            <div class="word-library-toolbar">
+              <label class="word-library-search"><span class="sr-only">搜索单词或中文释义</span><input id="wordLibrarySearch" type="search" autocomplete="off" placeholder="搜索单词、音标或中文释义…"/></label>
+              <label class="word-library-level"><span class="sr-only">词库范围</span><select id="wordLibraryLevel"><option value="all">全部词库</option><option value="cet4">四级主词</option><option value="cet6">六级补充</option></select></label>
+            </div>
+            <div class="word-library-filters" id="wordLibraryFilters" aria-label="按学习状态筛选">
+              <button class="active" type="button" data-word-filter="all">全部</button>
+              <button type="button" data-word-filter="learned">已背过</button>
+              <button type="button" data-word-filter="unlearned">未学习</button>
+              <button type="button" data-word-filter="known">认识</button>
+              <button type="button" data-word-filter="fuzzy">模糊</button>
+              <button type="button" data-word-filter="unknown">不认识</button>
+            </div>
+            <div class="word-library-result-head"><p id="wordLibraryResultCount">正在整理词库…</p><small>按四级考频顺序排列</small></div>
+            <div class="word-library-list" id="wordLibraryList" aria-live="polite"></div>
+            <div class="word-library-pagination">
+              <button class="button ghost small" type="button" id="wordLibraryPrev">上一页</button>
+              <span id="wordLibraryPage">第 1 / 1 页</span>
+              <button class="button ghost small" type="button" id="wordLibraryNext">下一页</button>
+            </div>
+          </article>
         </section>
 
         <section class="view" id="view-listening" data-view="listening" hidden>
@@ -416,10 +450,11 @@
 
       <nav class="bottom-nav" aria-label="移动端主导航">
         <button class="active" type="button" data-view-target="today"><span>01</span>今日</button>
-        <button type="button" data-view-target="listening"><span>02</span>听力</button>
-        <button type="button" data-view-target="ai"><span>03</span>AI</button>
-        <button type="button" data-view-target="progress"><span>04</span>进度</button>
-        <button type="button" data-view-target="settings"><span>05</span>设置</button>
+        <button type="button" data-view-target="words"><span>02</span>词表</button>
+        <button type="button" data-view-target="listening"><span>03</span>听力</button>
+        <button type="button" data-view-target="ai"><span>04</span>AI</button>
+        <button type="button" data-view-target="progress"><span>05</span>进度</button>
+        <button type="button" data-view-target="settings"><span>06</span>设置</button>
       </nav>
     </div>
 
@@ -461,6 +496,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=42" defer></script>
+    <script src="./app.js?v=43" defer></script>
   </body>
 </html>

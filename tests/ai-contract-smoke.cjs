@@ -41,6 +41,6 @@ requireText(app, 'if (mode === "review")', "review group queue");
 requireText(app, "soundScore", "acoustic score component");
 requireText(app, "rhythmScore", "rhythm score component");
 requireText(html, 'id="assessWordPronunciation"', "word pronunciation assessment control");
-requireText(html, "app.js?v=42", "v42 script cache bust");
+requireText(html, "app.js?v=43", "v43 script cache bust");
 
 console.log("AI contract smoke test passed");
