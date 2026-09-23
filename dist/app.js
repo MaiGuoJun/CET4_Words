@@ -29,6 +29,74 @@ const fallbackWords = [
   { word: "responsible", phonetic: "rɪˈspɒnsəbl", partOfSpeech: "adj.", translation: "负责的", frequency: 614, phrase: "be responsible for", phraseMeaning: "对……负责；是……的原因" }
 ];
 
+const WORD_PREFIXES = [
+  ["counter", "counter-", "反；对抗"], ["under", "under-", "在下；不足"], ["super", "super-", "在上；超越"],
+  ["inter", "inter-", "在……之间"], ["trans", "trans-", "横跨；转移"], ["extra", "extra-", "在外；超出"],
+  ["micro", "micro-", "微小"], ["multi", "multi-", "多"], ["post", "post-", "在……之后"],
+  ["semi", "semi-", "半"], ["anti", "anti-", "反对；抗"], ["auto", "auto-", "自己；自动"],
+  ["over", "over-", "过度；在上"], ["pre", "pre-", "在……之前"], ["sub", "sub-", "在下；次级"],
+  ["non", "non-", "非；不"], ["mis", "mis-", "错误地"], ["dis", "dis-", "否定；分开"],
+  ["re", "re-", "再次；返回"], ["un", "un-", "不；相反"], ["de", "de-", "去除；向下"],
+  ["im", "im-", "进入/使；也可表否定"], ["in", "in-", "进入/在内；也可表否定"], ["ir", "ir-", "不"], ["il", "il-", "不"]
+].map(([form, label, meaning]) => ({ form, label, meaning }));
+
+const WORD_SUFFIXES = [
+  ["ization", "-ization", "构成名词：过程或结果"], ["ification", "-ification", "构成名词：使……化"],
+  ["ability", "-ability", "构成名词：能力或性质"], ["ibility", "-ibility", "构成名词：能力或性质"],
+  ["ation", "-ation", "构成名词：过程或结果"], ["ition", "-ition", "构成名词：过程或结果"],
+  ["sion", "-sion", "构成名词：行为或结果"], ["tion", "-tion", "构成名词：行为或结果"],
+  ["ment", "-ment", "构成名词：行为、状态或结果"], ["ness", "-ness", "构成名词：性质或状态"],
+  ["ance", "-ance", "构成名词：状态或行为"], ["ence", "-ence", "构成名词：状态或性质"],
+  ["ship", "-ship", "构成名词：关系或身份"], ["hood", "-hood", "构成名词：时期或状态"],
+  ["ism", "-ism", "构成名词：主义或现象"], ["ist", "-ist", "构成人：从事者"],
+  ["ative", "-ative", "构成形容词：具有……性质"], ["ive", "-ive", "构成形容词：有……倾向"],
+  ["able", "-able", "构成形容词：可以……的"], ["ible", "-ible", "构成形容词：可以……的"],
+  ["ical", "-ical", "构成形容词：与……有关"], ["ous", "-ous", "构成形容词：充满或具有"],
+  ["ful", "-ful", "构成形容词：充满……的"], ["less", "-less", "构成形容词：缺少……的"],
+  ["ize", "-ize", "构成动词：使……化"], ["ise", "-ise", "构成动词：使……化"],
+  ["ify", "-ify", "构成动词：使成为"], ["ly", "-ly", "常构成副词"],
+  ["er", "-er", "构成人或工具"], ["or", "-or", "构成人或工具"], ["age", "-age", "构成名词：状态或集合"]
+].map(([form, label, meaning]) => ({ form, label, meaning }));
+
+const WORD_ROOTS = [
+  [["spect"], "spect", "看"], [["script", "scrib"], "scrib / script", "写"], [["struct"], "struct", "建造"],
+  [["tract"], "tract", "拉；引"], [["duct"], "duc / duct", "引导"], [["dict"], "dict", "说；断言"],
+  [["ject"], "ject", "投；抛"], [["port"], "port", "携带；运输"], [["form"], "form", "形状；形成"],
+  [["press"], "press", "压"], [["rupt"], "rupt", "破裂"], [["cept", "ceive"], "cept / ceive", "拿；接受"],
+  [["cred"], "cred", "相信"], [["memor", "memori"], "memor", "记忆"], [["graph", "gram"], "graph / gram", "写；记录"],
+  [["phon"], "phon", "声音"], [["photo"], "photo", "光"], [["psych"], "psych", "心智"],
+  [["chron"], "chron", "时间"], [["therm"], "therm", "热"], [["terr"], "terr", "土地"],
+  [["aqua"], "aqua", "水"], [["astro"], "astro", "星"], [["geo"], "geo", "地球"],
+  [["scope"], "scope", "看；观察工具"], [["meter"], "meter", "测量"], [["cycle", "cycl"], "cycl", "圆；循环"],
+  [["quest"], "quest", "寻求；询问"], [["termin"], "termin", "界限；终点"], [["creat"], "creat", "创造"],
+  [["equ"], "equ", "相等"], [["gener", "gen"], "gen", "产生；出生"], [["liber"], "liber", "自由"],
+  [["loc"], "loc", "地方"], [["mort"], "mort", "死亡"], [["natur", "nat"], "nat", "出生；自然"],
+  [["scien"], "sci", "知道；知识"], [["veri"], "ver", "真实"], [["vita", "vivi"], "vit / viv", "生命"],
+  [["sect"], "sect", "切；分"], [["sens"], "sens", "感觉"], [["vision", "video"], "vid / vis", "看"],
+  [["vocat", "voice"], "voc", "声音；呼叫"], [["bene"], "bene", "好"], [["aud"], "aud", "听"]
+].map(([forms, label, meaning]) => ({ forms, label, meaning }));
+
+const DERIVATION_SUFFIX_RULES = [
+  ["ization", ["ize"]], ["isation", ["ise"]], ["ification", ["ify"]], ["ability", ["able"]], ["ibility", ["ible"]],
+  ["ation", ["ate", "e", ""]], ["ition", ["e", ""]], ["sion", ["de", "d", ""]], ["tion", ["t", "te", ""]],
+  ["iness", ["y"]], ["ness", [""]], ["ance", ["ant", ""]], ["ence", ["ent", ""]], ["ment", [""]],
+  ["ative", ["ate", ""]], ["ive", ["e", ""]], ["ity", ["e", ""]], ["able", ["e", ""]], ["ible", ["e", ""]],
+  ["ical", ["y", "ic", ""]], ["ous", [""]], ["ful", [""]], ["less", [""]], ["ship", [""]], ["hood", [""]],
+  ["ism", [""]], ["ist", [""]], ["ize", [""]], ["ise", [""]], ["ify", [""]], ["age", [""]], ["ly", [""]],
+  ["er", [""]], ["or", [""]]
+].map(([suffix, replacements]) => ({ suffix, replacements }));
+const PRODUCTIVE_DERIVATION_SUFFIXES = new Set(["ness", "ful", "less", "ize", "ise", "ify"]);
+
+const CONFUSABLE_GROUPS = [
+  ["accept", "except"], ["access", "assess"], ["adapt", "adopt"], ["advice", "advise"], ["affect", "effect"],
+  ["allusion", "illusion"], ["assure", "ensure", "insure"], ["beside", "besides"], ["complement", "compliment"],
+  ["conscience", "conscious"], ["desert", "dessert"], ["economic", "economical"], ["emigrate", "immigrate"],
+  ["historic", "historical"], ["industrial", "industrious"], ["later", "latter", "latest"], ["lie", "lay"],
+  ["loose", "lose"], ["personal", "personnel"], ["precede", "proceed"], ["principal", "principle"],
+  ["quiet", "quite"], ["raise", "rise", "arise"], ["respectful", "respective"], ["sensible", "sensitive"],
+  ["stationary", "stationery"], ["weather", "whether"], ["worth", "worthy"]
+];
+
 const AI_SCENARIOS = {
   campus: {
     title: "校园生活",
@@ -101,6 +169,12 @@ let currentWord = null;
 let studyQueue = [];
 let screeningSessionOffset = 0;
 let stableStudyHeight = 0;
+let activeWordTool = "mnemonic";
+let wordLookup = new Map();
+let wordFamilyIndex = new Map();
+let confusableIndex = new Map();
+let wordSpellingBuckets = new Map();
+const wordInsightCache = new Map();
 let quizQueue = [];
 let currentQuiz = null;
 let currentTrack = null;
@@ -602,6 +676,7 @@ async function loadContent() {
     })
   ]);
   words = wordResult.status === "fulfilled" && wordResult.value.length ? wordResult.value : fallbackWords;
+  initializeWordInsightIndex();
   listeningTracks = trackResult.status === "fulfilled" ? trackResult.value : [];
   listeningTracks.push(...(await getAllLocalTracks()));
   applyRecommendedTarget();
@@ -1028,6 +1103,220 @@ function renderWordPhrases(word) {
   `).join("");
 }
 
+function normalizedWordName(value) {
+  return String(value || "").trim().toLocaleLowerCase("en-US");
+}
+
+function familyKeys(value) {
+  const name = normalizedWordName(value);
+  const keys = new Set([name]);
+  if (!name || !/^[a-z-]+$/.test(name)) return [...keys];
+  if (name.endsWith("e") && name.length > 4) keys.add(name.slice(0, -1));
+  for (const rule of DERIVATION_SUFFIX_RULES) {
+    if (rule.suffix.length < 4 && !PRODUCTIVE_DERIVATION_SUFFIXES.has(rule.suffix)) continue;
+    if (!name.endsWith(rule.suffix) || name.length - rule.suffix.length < 2) continue;
+    const stem = name.slice(0, -rule.suffix.length);
+    rule.replacements.forEach((replacement) => keys.add(`${stem}${replacement}`));
+  }
+  for (const prefix of WORD_PREFIXES) {
+    if (!name.startsWith(prefix.form) || name.length - prefix.form.length < 3) continue;
+    const remainder = name.slice(prefix.form.length);
+    if (wordLookup.has(remainder)) keys.add(remainder);
+  }
+  return [...keys].filter((key) => key && (key.length >= 4 || wordLookup.has(key)));
+}
+
+function initializeWordInsightIndex() {
+  wordLookup = new Map(words.map((word) => [normalizedWordName(word.word), word]));
+  wordFamilyIndex = new Map();
+  confusableIndex = new Map();
+  wordSpellingBuckets = new Map();
+  wordInsightCache.clear();
+  words.forEach((word) => {
+    const name = normalizedWordName(word.word);
+    const bucketKey = `${name[0] || ""}:${name.length}`;
+    if (!wordSpellingBuckets.has(bucketKey)) wordSpellingBuckets.set(bucketKey, []);
+    wordSpellingBuckets.get(bucketKey).push(word);
+    familyKeys(word.word).forEach((key) => {
+      if (!wordFamilyIndex.has(key)) wordFamilyIndex.set(key, []);
+      wordFamilyIndex.get(key).push(word);
+    });
+  });
+  CONFUSABLE_GROUPS.forEach((group) => {
+    const available = group.map((name) => wordLookup.get(name)).filter(Boolean);
+    available.forEach((word) => confusableIndex.set(normalizedWordName(word.word), available.filter((item) => item !== word)));
+  });
+}
+
+function conciseWordMeaning(word) {
+  const sense = [...wordSenseRows(word)].sort((a, b) => Number(b.stars || 0) - Number(a.stars || 0))[0];
+  const parts = String(sense?.meaning || word?.brief || word?.translation || "暂无释义").split(/[；;]/).filter(Boolean);
+  return parts.slice(0, 2).join("；");
+}
+
+function wordLevelLabel(word) {
+  return word?.isCET6Supplement || word?.level === "CET6" ? "六级补充" : "四级";
+}
+
+function findWordRoots(value) {
+  const name = normalizedWordName(value);
+  return WORD_ROOTS.flatMap((root) => {
+    const matched = root.forms.filter((form) => name.includes(form)).sort((a, b) => b.length - a.length)[0];
+    if (!matched) return [];
+    if (matched.length <= 3 && !(name.startsWith(matched) || name.endsWith(matched) || name.length <= matched.length + 5)) return [];
+    return [{ ...root, matched }];
+  }).sort((a, b) => b.matched.length - a.matched.length).slice(0, 2);
+}
+
+function findWordAffixes(value) {
+  const name = normalizedWordName(value);
+  const roots = findWordRoots(name);
+  const keys = familyKeys(name);
+  const relatedBase = keys.find((key) => key !== name && wordLookup.has(key));
+  const prefix = [...WORD_PREFIXES]
+    .sort((a, b) => b.form.length - a.form.length)
+    .find((item) => {
+      if (!name.startsWith(item.form) || name.length - item.form.length < 3) return false;
+      const remainder = name.slice(item.form.length);
+      return wordLookup.has(remainder) || findWordRoots(remainder).length || item.form.length >= 4;
+    });
+  const suffix = [...WORD_SUFFIXES]
+    .sort((a, b) => b.form.length - a.form.length)
+    .find((item) => {
+      if (!name.endsWith(item.form) || name.length - item.form.length < 3) return false;
+      return Boolean(relatedBase) || item.form.length >= 4 || roots.length > 0;
+    });
+  return [
+    ...(prefix ? [{ ...prefix, kind: "前缀", split: `${prefix.form} + ${name.slice(prefix.form.length)}` }] : []),
+    ...(suffix ? [{ ...suffix, kind: "后缀", split: `${name.slice(0, -suffix.form.length)} + ${suffix.form}` }] : [])
+  ];
+}
+
+function findWordDerivatives(word) {
+  const name = normalizedWordName(word?.word);
+  const targetKeys = familyKeys(name);
+  const scores = new Map();
+  targetKeys.forEach((key) => {
+    (wordFamilyIndex.get(key) || []).forEach((candidate) => {
+      const candidateName = normalizedWordName(candidate.word);
+      if (candidateName === name) return;
+      const isDirectBase = targetKeys.includes(candidateName);
+      const isDirectDerivedForm = familyKeys(candidateName).includes(name);
+      if (!isDirectBase && !isDirectDerivedForm) return;
+      const directBaseBonus = candidateName === key ? 1000 : 0;
+      scores.set(candidateName, Math.max(scores.get(candidateName) || 0, key.length + directBaseBonus));
+    });
+  });
+  return [...scores.entries()]
+    .map(([candidateName, score]) => ({ word: wordLookup.get(candidateName), score }))
+    .filter((item) => item.word)
+    .sort((a, b) => b.score - a.score || Number(a.word.isCET6Supplement) - Number(b.word.isCET6Supplement) || Number(b.word.frequency || 0) - Number(a.word.frequency || 0))
+    .slice(0, 4)
+    .map((item) => item.word);
+}
+
+function editDistance(a, b) {
+  const rows = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i += 1) rows[i][0] = i;
+  for (let j = 0; j <= b.length; j += 1) rows[0][j] = j;
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      rows[i][j] = Math.min(rows[i - 1][j] + 1, rows[i][j - 1] + 1, rows[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) rows[i][j] = Math.min(rows[i][j], rows[i - 2][j - 2] + 1);
+    }
+  }
+  return rows[a.length][b.length];
+}
+
+function findSimilarWords(word, derivatives) {
+  const name = normalizedWordName(word?.word);
+  const derivativeNames = new Set(derivatives.map((item) => normalizedWordName(item.word)));
+  const curated = confusableIndex.get(name) || [];
+  const nearby = [name.length - 1, name.length, name.length + 1].flatMap((length) => wordSpellingBuckets.get(`${name[0] || ""}:${length}`) || []);
+  const fallback = nearby
+    .filter((candidate) => {
+      const other = normalizedWordName(candidate.word);
+      if (other === name || derivativeNames.has(other) || name.length < 4 || other.length < 4) return false;
+      if (name[0] !== other[0] || Math.abs(name.length - other.length) > 1) return false;
+      const distance = editDistance(name, other);
+      return distance <= 1 || (distance <= 2 && name.slice(0, 2) === other.slice(0, 2));
+    })
+    .sort((a, b) => editDistance(name, normalizedWordName(a.word)) - editDistance(name, normalizedWordName(b.word)) || Number(a.isCET6Supplement) - Number(b.isCET6Supplement) || Number(b.frequency || 0) - Number(a.frequency || 0));
+  const result = [];
+  [...curated, ...fallback].forEach((candidate) => {
+    if (!result.some((item) => normalizedWordName(item.word) === normalizedWordName(candidate.word))) result.push(candidate);
+  });
+  return result.slice(0, 4);
+}
+
+function buildWordMnemonic(word, insight) {
+  const meaning = conciseWordMeaning(word);
+  const pieces = [
+    ...insight.affixes.map((item) => `${item.label}（${item.meaning}）`),
+    ...insight.roots.map((item) => `${item.label}（${item.meaning}）`)
+  ];
+  if (pieces.length) return `拆词联想：${pieces.join(" + ")}。把这些线索和核心义“${meaning}”连在一起记。`;
+  if (insight.derivatives.length) {
+    const names = insight.derivatives.slice(0, 3).map((item) => item.word).join("、");
+    return `词族联想：把 ${word.word} 和 ${names} 放在一起比较，先抓住共同拼写，再锁定核心义“${meaning}”。`;
+  }
+  const phrase = wordPhraseRows(word)[0];
+  if (phrase) return `搭配联想：用 “${phrase.text}” 记住“${phrase.meaning || meaning}”，让 ${word.word} 留在完整语境里。`;
+  return `核心义联想：先把 ${word.word} 锁定为“${meaning}”；复习时遮住中文，先读出单词，再主动回想意思。`;
+}
+
+function buildWordInsight(word) {
+  const key = normalizedWordName(word?.word);
+  if (wordInsightCache.has(key)) return wordInsightCache.get(key);
+  const roots = findWordRoots(key);
+  const affixes = findWordAffixes(key);
+  const derivatives = findWordDerivatives(word);
+  const insight = { roots, affixes, derivatives, similar: [] };
+  insight.similar = findSimilarWords(word, derivatives);
+  insight.mnemonic = buildWordMnemonic(word, insight);
+  wordInsightCache.set(key, insight);
+  return insight;
+}
+
+function relatedWordsMarkup(items, emptyText) {
+  if (!items.length) return `<p class="word-tool-empty">${escapeHtml(emptyText)}</p>`;
+  return `<div class="related-word-list">${items.map((item) => `
+    <article class="related-word-item">
+      <div><strong>${escapeHtml(item.word)}</strong><span>${escapeHtml(item.partOfSpeech || "")}</span></div>
+      <p>${escapeHtml(conciseWordMeaning(item))}</p>
+      <small class="word-level-chip ${item.isCET6Supplement || item.level === "CET6" ? "cet6" : ""}">${wordLevelLabel(item)}</small>
+    </article>
+  `).join("")}</div>`;
+}
+
+function renderWordInsights(word) {
+  const tools = $("#wordTools");
+  const panel = $("#wordToolContent");
+  if (!word || !tools || !panel) return;
+  tools.hidden = false;
+  const insight = buildWordInsight(word);
+  $$('[data-word-tool]', tools).forEach((button) => {
+    const active = button.dataset.wordTool === activeWordTool;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  if (activeWordTool === "similar") {
+    panel.innerHTML = `${relatedWordsMarkup(insight.similar, "当前词库里暂未找到可靠的相近或易混词。")}<p class="word-tool-note">优先展示考试中容易看错、拼错或混用的词。</p>`;
+  } else if (activeWordTool === "derivatives") {
+    panel.innerHTML = `${relatedWordsMarkup(insight.derivatives, "当前词库里暂未找到可靠的同族派生词。")}<p class="word-tool-note">优先匹配直接派生词，词库不足时补充同构词线索；六级词会单独标注。</p>`;
+  } else if (activeWordTool === "affixes") {
+    panel.innerHTML = insight.affixes.length ? `<div class="morpheme-list">${insight.affixes.map((item) => `
+      <article class="morpheme-item"><small>${item.kind}</small><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.meaning)}</p><code>${escapeHtml(item.split)}</code></article>
+    `).join("")}</div><p class="word-tool-note">这是便于备考的学习拆分；个别单词的严格词源可能更复杂。</p>` : `<p class="word-tool-empty">这个词没有适合直接拆出的常见词缀，整体记忆会更准确。</p>`;
+  } else if (activeWordTool === "roots") {
+    panel.innerHTML = insight.roots.length ? `<div class="morpheme-list">${insight.roots.map((item) => `
+      <article class="morpheme-item"><small>词根线索</small><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.meaning)}</p><code>${escapeHtml(item.matched)}</code></article>
+    `).join("")}</div><p class="word-tool-note">词根用于辅助联想，不建议用它代替单词在句子里的真实含义。</p>` : `<p class="word-tool-empty">这个词更适合整体记忆，不建议为了拆词而强行找词根。</p>`;
+  } else {
+    panel.innerHTML = `<div class="mnemonic-copy"><span>记忆路线</span><p>${escapeHtml(insight.mnemonic)}</p></div><p class="word-tool-note">先理解核心义，再用词族、词根或搭配加深印象。</p>`;
+  }
+}
+
 function stabilizeStudyWorkspace() {
   const workspace = $("#wordWorkspace");
   stableStudyHeight = Math.max(stableStudyHeight, Math.ceil(workspace.getBoundingClientRect().height));
@@ -1063,6 +1352,7 @@ function renderCurrentWord() {
   $("#revealWord").hidden = false;
   $("#revealWord").textContent = "显示释义";
   renderWordPhrases(currentWord);
+  renderWordInsights(currentWord);
   void prepareCurrentPronunciation(currentWord.word);
   replayMotion($("#wordWorkspace"), "word-enter");
 }
@@ -1083,6 +1373,8 @@ function renderEmptyStudy() {
   $("#wordMeanings").replaceChildren();
   $("#wordPhrases").replaceChildren();
   $("#phraseBox").hidden = true;
+  $("#wordToolContent")?.replaceChildren();
+  if ($("#wordTools")) $("#wordTools").hidden = true;
   setPronunciationButton("idle");
 }
 
@@ -3127,6 +3419,13 @@ function bindEvents() {
   $("#switchStudyMode").addEventListener("click", () => openStudy("learn"));
   $$("[data-study-mode]").forEach((button) => button.addEventListener("click", () => openStudy(button.dataset.studyMode)));
   $("#revealWord").addEventListener("click", revealCurrentWord);
+  $("#wordToolTabs").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-word-tool]");
+    if (!button || !currentWord) return;
+    activeWordTool = button.dataset.wordTool;
+    renderWordInsights(currentWord);
+    stabilizeStudyWorkspace();
+  });
   $("#speakWord").addEventListener("click", () => { void speak(currentWord?.word, { notifyFallback: true }); });
   const nativePronunciation = $("#wordPronunciationPlayer");
   nativePronunciation.addEventListener("play", () => {
@@ -3352,7 +3651,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=35", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=36", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

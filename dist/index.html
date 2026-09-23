@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=35" />
+    <link rel="stylesheet" href="./styles.css?v=36" />
   </head>
   <body>
     <div class="app-shell">
@@ -158,6 +158,16 @@
                 <div class="phrase-box" id="phraseBox" hidden>
                   <span>高频搭配</span><ul class="phrase-list" id="wordPhrases"></ul>
                 </div>
+                <section class="word-tools" id="wordTools" aria-label="单词拓展">
+                  <div class="word-tool-tabs" id="wordToolTabs" role="tablist" aria-label="单词拓展功能">
+                    <button type="button" role="tab" data-word-tool="similar" aria-selected="false">相近词</button>
+                    <button type="button" role="tab" data-word-tool="derivatives" aria-selected="false">派生词</button>
+                    <button type="button" role="tab" data-word-tool="affixes" aria-selected="false">词缀</button>
+                    <button type="button" role="tab" data-word-tool="roots" aria-selected="false">词根</button>
+                    <button type="button" role="tab" data-word-tool="mnemonic" aria-selected="true" class="active">助记</button>
+                  </div>
+                  <div class="word-tool-content" id="wordToolContent" role="tabpanel" aria-live="polite"></div>
+                </section>
               </div>
               <button class="button secondary reveal-button" type="button" id="revealWord">显示释义</button>
               <div class="rating-actions" id="ratingActions" hidden>
@@ -419,6 +429,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=35" defer></script>
+    <script src="./app.js?v=36" defer></script>
   </body>
 </html>
