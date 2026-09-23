@@ -199,6 +199,7 @@ let pronunciationAudio = null;
 let pronunciationRequestId = 0;
 let pronunciationAudioContext = null;
 let pronunciationAudioSource = null;
+let cloudSpeechCapabilities = { checkedAt: 0, azureSpeech: false, pending: null };
 let aiPending = false;
 let aiServiceStatus = "checking";
 let aiServiceInfo = null;
@@ -1061,9 +1062,11 @@ function updateStageStates(record, due, quizDone, listened) {
 function startMissionFromState() {
   const counts = stateCounts();
   const record = todayRecord();
+  const listened = state.completedListening.some((entry) => entry.date === localDateKey());
   if (state.vocabAssessment.status !== "complete" && counts.screened < words.length && record.screened < Math.min(500, words.length - counts.screened)) return openStudy("screen");
   if (record.learned < state.settings.dailyTarget) return openStudy("learn");
   if (record.quizTotal < Math.min(10, state.settings.dailyTarget)) return openStudy("quiz");
+  if (listened) return openStudy("review");
   currentView = "listening";
   renderNavigation();
 }
@@ -1073,8 +1076,9 @@ function openStudy(mode) {
   studyMode = mode;
   $("#studyPanel").hidden = false;
   $$("[data-study-mode]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.studyMode === mode);
-    button.setAttribute("aria-selected", button.dataset.studyMode === mode ? "true" : "false");
+    const active = button.dataset.studyMode === mode || (mode === "review" && button.dataset.studyMode === "learn");
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
   });
   currentWordIndex = 0;
   screeningSessionOffset = mode === "screen" ? todayRecord().screened : 0;
@@ -1082,7 +1086,10 @@ function openStudy(mode) {
   stableStudyHeight = 0;
   $("#wordWorkspace").style.removeProperty("min-height");
   if (mode === "quiz") prepareQuiz();
-  else renderCurrentWord();
+  else {
+    renderCurrentWord();
+    if (mode === "review" && studyQueue.length) toast("已生成复习组", `优先复习 ${studyQueue.length} 个薄弱或久未复习的单词。`);
+  }
   $("#studyPanel").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -1090,6 +1097,18 @@ function createStudyQueue(mode = studyMode) {
   if (mode === "screen") {
     const remaining = Math.max(0, 500 - todayRecord().screened);
     return unscreenedWords().slice(0, remaining);
+  }
+  if (mode === "review") {
+    const statusPriority = { unknown: 0, fuzzy: 1, known: 2 };
+    return words.filter((word) => getWordState(word)?.learnedAt).sort((left, right) => {
+      const leftState = getWordState(left);
+      const rightState = getWordState(right);
+      const statusDifference = (statusPriority[leftState?.status] ?? 3) - (statusPriority[rightState?.status] ?? 3);
+      if (statusDifference) return statusDifference;
+      const leftTime = Date.parse(leftState?.lastReviewedAt || leftState?.learnedAt || 0) || 0;
+      const rightTime = Date.parse(rightState?.lastReviewedAt || rightState?.learnedAt || 0) || 0;
+      return leftTime - rightTime;
+    }).slice(0, 20);
   }
   if (mode !== "learn") return [];
   const due = dueWords();
@@ -1709,6 +1728,29 @@ async function fetchCloudPronunciation(word) {
   return result;
 }
 
+async function fetchZhipuWordPronunciation(word) {
+  if (!deviceAIConfig.apiKey) return null;
+  try {
+    const blob = await requestAssessmentSpeech(word);
+    const objectUrl = URL.createObjectURL(blob);
+    const clip = {
+      audio: objectUrl,
+      objectUrl,
+      blob,
+      sourceUrl: "",
+      licenseName: "",
+      accent: state.settings.accent || "en-US",
+      generated: true,
+      generatedProvider: "zhipu"
+    };
+    cloudPronunciationAssetCache.set(pronunciationCacheKey(word), clip);
+    trimCloudPronunciationCache();
+    return clip;
+  } catch {
+    return null;
+  }
+}
+
 function chooseWikimediaClip(data, word, accentCode) {
   const pages = Array.isArray(data?.query?.pages) ? data.query.pages : [];
   const normalizedWord = word.replace(/_/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
@@ -1783,9 +1825,12 @@ async function getPronunciationClip(text) {
   const key = `${state.settings.accent || "en-US"}:${word}`;
   if (pronunciationCache.has(key)) return pronunciationCache.get(key);
   const isLocalApp = ["127.0.0.1", "localhost"].includes(window.location.hostname);
-  const request = isLocalApp
-    ? firstAvailablePronunciation([fetchLocalPronunciation(word), fetchCloudPronunciation(word)])
-    : firstAvailablePronunciation([fetchCloudPronunciation(word), fetchDictionaryPronunciation(word), fetchWikimediaPronunciation(word)]);
+  const request = (async () => {
+    const human = isLocalApp
+      ? await firstAvailablePronunciation([fetchLocalPronunciation(word), fetchCloudPronunciation(word)])
+      : await firstAvailablePronunciation([fetchCloudPronunciation(word), fetchDictionaryPronunciation(word), fetchWikimediaPronunciation(word)]);
+    return human || fetchZhipuWordPronunciation(word);
+  })();
   pronunciationCache.set(key, request);
   const clip = await request;
   if (clip) pronunciationCache.set(key, clip);
@@ -1845,7 +1890,10 @@ async function getWordPronunciationBlob(text) {
   if (pronunciationBlobCache.has(key)) return pronunciationBlobCache.get(key);
   const request = (async () => {
     const clip = await getPronunciationClip(text);
-    if (!clip?.audio) throw new Error("这个词暂时没有可用于纠音的标准录音。" );
+    if (!clip?.audio) {
+      if (deviceAIConfig.apiKey) return requestAssessmentSpeech(text);
+      throw new Error("这个词暂时没有可用于纠音的标准录音。" );
+    }
     if (clip.blob) return clip.blob;
     try {
       const response = await fetch(clip.audio, { cache: "force-cache" });
@@ -1854,6 +1902,7 @@ async function getWordPronunciationBlob(text) {
     } catch {
       const cloudClip = await fetchCloudPronunciation(text);
       if (cloudClip?.blob) return cloudClip.blob;
+      if (deviceAIConfig.apiKey) return requestAssessmentSpeech(text);
       throw new Error("标准发音暂时无法读取。" );
     }
   })();
@@ -1963,7 +2012,8 @@ function renderPronunciationSource(clip) {
   container.removeAttribute("aria-hidden");
   const label = document.createElement("span");
   const accent = clip.accent === "en-US" ? "美音" : clip.accent === "en-GB" ? "英音" : "";
-  label.textContent = clip.fallback ? "设备备用发音" : clip.generated ? `Azure 自然语音${accent ? ` · ${accent}` : ""}` : `真人录音${accent ? ` · ${accent}` : ""}`;
+  const generatedName = clip.generatedProvider === "zhipu" ? "智谱自然语音" : "Azure 自然语音";
+  label.textContent = clip.fallback ? "设备备用发音" : clip.generated ? `${generatedName}${accent ? ` · ${accent}` : ""}` : `真人录音${accent ? ` · ${accent}` : ""}`;
   container.append(label);
   if (!clip.fallback && !clip.generated && clip.sourceUrl) {
     const source = document.createElement("a");
@@ -3025,8 +3075,27 @@ async function requestCloudTranscription(wavBlob) {
   return text;
 }
 
+async function azureSpeechAvailable() {
+  if (!canUseCloudSpeech()) return false;
+  const now = Date.now();
+  if (now - cloudSpeechCapabilities.checkedAt < 5 * 60 * 1000) return cloudSpeechCapabilities.azureSpeech;
+  if (cloudSpeechCapabilities.pending) return cloudSpeechCapabilities.pending;
+  cloudSpeechCapabilities.pending = fetch(`${syncConfig.endpoint}/health`, { cache: "no-store" })
+    .then((response) => response.ok ? response.json() : null)
+    .then((data) => {
+      cloudSpeechCapabilities = { checkedAt: Date.now(), azureSpeech: data?.azureSpeech === true, pending: null };
+      return cloudSpeechCapabilities.azureSpeech;
+    })
+    .catch(() => {
+      cloudSpeechCapabilities = { checkedAt: Date.now(), azureSpeech: false, pending: null };
+      return false;
+    });
+  return cloudSpeechCapabilities.pending;
+}
+
 async function requestAzurePronunciationAssessment(wavBlob, word) {
   if (!canUseCloudSpeech()) throw new Error("请先连接 Cloudflare，Azure 密钥需要由它安全保管。" );
+  if (!await azureSpeechAvailable()) throw new Error("Azure 发音评测未启用，已改用智谱与本地评分。" );
   const params = new URLSearchParams({ reference: word, language: state.settings.accent || "en-US" });
   const response = await fetch(`${syncConfig.endpoint}/pronunciation-assessment?${params}`, {
     method: "POST",
@@ -4602,7 +4671,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=40", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=41", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

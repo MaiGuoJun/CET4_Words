@@ -29,11 +29,14 @@ requireText(app, "listeningWordStates", "separate listening SRS state");
 requireText(server, 'body.task === "writing"', "server writing review route");
 requireText(app, "comparePronunciationAudio", "acoustic pronunciation comparison");
 requireText(app, "requestAzurePronunciationAssessment", "Azure phoneme pronunciation assessment");
+requireText(app, "fetchZhipuWordPronunciation", "Zhipu word pronunciation fallback");
 requireText(app, "renderPhonemeAssessment", "phoneme score rendering");
 requireText(app, "/word-audio", "Cloudflare pronunciation audio proxy");
+requireText(app, 'if (listened) return openStudy("review")', "completed-day review action");
+requireText(app, 'if (mode === "review")', "review group queue");
 requireText(app, "soundScore", "acoustic score component");
 requireText(app, "rhythmScore", "rhythm score component");
 requireText(html, 'id="assessWordPronunciation"', "word pronunciation assessment control");
-requireText(html, "app.js?v=40", "v40 script cache bust");
+requireText(html, "app.js?v=41", "v41 script cache bust");
 
 console.log("AI contract smoke test passed");

@@ -16,7 +16,16 @@ source = source.replace(/init\(\);\s*$/, `
   const sameSound = scorePronunciationFeatures(features, features);
   const differentSound = scorePronunciationFeatures(features, otherFeatures);
   const combined = combinedPronunciationScore({ textScore: 100, soundScore: 80, rhythmScore: 60, sentence: false });
-  globalThis.__studyResults = { exact, partial, srs, sentences, featureFrames: features.frames.length, duration: features.duration, combined, sameSound, differentSound };
+  words = [{ word: "known-newer" }, { word: "fuzzy-old" }, { word: "unknown-new" }, { word: "known-old" }];
+  state = defaultState();
+  state.wordStates = {
+    "known-newer": { status: "known", learnedAt: "2026-09-01T00:00:00Z", lastReviewedAt: "2026-09-22T00:00:00Z" },
+    "fuzzy-old": { status: "fuzzy", learnedAt: "2026-08-01T00:00:00Z", lastReviewedAt: "2026-09-01T00:00:00Z" },
+    "unknown-new": { status: "unknown", learnedAt: "2026-09-20T00:00:00Z", lastReviewedAt: "2026-09-21T00:00:00Z" },
+    "known-old": { status: "known", learnedAt: "2026-08-01T00:00:00Z", lastReviewedAt: "2026-09-02T00:00:00Z" }
+  };
+  const reviewWords = createStudyQueue("review").map((word) => word.word);
+  globalThis.__studyResults = { exact, partial, srs, sentences, featureFrames: features.frames.length, duration: features.duration, combined, sameSound, differentSound, reviewWords };
 `);
 
 const storage = new Map();
@@ -34,4 +43,5 @@ if (result.sentences.length !== 3) throw new Error("Transcript should split into
 if (result.featureFrames < 20 || result.duration < 0.9) throw new Error("Pronunciation feature extraction should retain voiced audio");
 if (result.combined !== 83) throw new Error("Pronunciation component weights changed unexpectedly");
 if (result.sameSound.soundScore <= result.differentSound.soundScore) throw new Error("Acoustic scoring should prefer identical audio features");
+if (result.reviewWords.join(",") !== "unknown-new,fuzzy-old,known-old,known-newer") throw new Error(`Review group priority is incorrect: ${result.reviewWords.join(",")}`);
 console.log("Study engine smoke test passed");
