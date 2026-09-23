@@ -194,6 +194,7 @@ let dictationState = { sentences: [], index: 0, result: null };
 const pronunciationCache = new Map();
 const pronunciationAssetCache = new Map();
 const pronunciationBlobCache = new Map();
+const cloudPronunciationAssetCache = new Map();
 let pronunciationAudio = null;
 let pronunciationRequestId = 0;
 let pronunciationAudioContext = null;
@@ -205,7 +206,7 @@ let aiBackendAvailable = false;
 let deviceAIConfig = loadDeviceAIConfig();
 let aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: false, messageIndex: null };
 let shadowingState = { messageIndex: null, status: "idle", recognition: null, mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
-let wordPronunciationAssessment = { word: "", status: "idle", mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
+let wordPronunciationAssessment = { word: "", status: "idle", mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, provider: "", phonemes: [], errorType: "", error: "" };
 const ttsAssessmentCache = new Map();
 const visibleAITranslations = new Set();
 let voiceSession = {
@@ -1369,7 +1370,7 @@ function renderCurrentWord() {
   const savedPronunciation = state.pronunciationScores[currentWord.word];
   wordPronunciationAssessment = savedPronunciation
     ? { ...wordPronunciationAssessment, ...savedPronunciation, word: currentWord.word, status: "complete", error: "" }
-    : { ...wordPronunciationAssessment, word: currentWord.word, status: "idle", recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
+    : { ...wordPronunciationAssessment, word: currentWord.word, status: "idle", recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, provider: "", phonemes: [], errorType: "", error: "" };
   $("#wordText").textContent = currentWord.word;
   $("#wordPhonetic").textContent = currentWord.phonetic ? `/${currentWord.phonetic.replace(/^\/?|\/?$/g, "")}/` : "";
   renderWordMeanings(currentWord);
@@ -1649,6 +1650,65 @@ async function fetchLocalPronunciation(word) {
   };
 }
 
+function canUseCloudSpeech() {
+  return Boolean(syncConfig.endpoint && syncConfig.token);
+}
+
+function trimCloudPronunciationCache() {
+  while (cloudPronunciationAssetCache.size > 30) {
+    const [key, asset] = cloudPronunciationAssetCache.entries().next().value;
+    cloudPronunciationAssetCache.delete(key);
+    if (asset && typeof asset.then !== "function" && asset.objectUrl) URL.revokeObjectURL(asset.objectUrl);
+    pronunciationCache.delete(key);
+    pronunciationAssetCache.delete(key);
+    pronunciationBlobCache.delete(key);
+  }
+}
+
+async function fetchCloudPronunciation(word) {
+  if (!canUseCloudSpeech()) return null;
+  const key = pronunciationCacheKey(word);
+  if (cloudPronunciationAssetCache.has(key)) return cloudPronunciationAssetCache.get(key);
+  const request = (async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 16000);
+    try {
+      const params = new URLSearchParams({ word, accent: state.settings.accent || "en-US" });
+      const response = await fetch(`${syncConfig.endpoint}/word-audio?${params}`, {
+        headers: { Authorization: `Bearer ${syncConfig.token}` },
+        signal: controller.signal
+      });
+      if (!response.ok || !String(response.headers.get("Content-Type") || "").toLowerCase().startsWith("audio/")) return null;
+      const blob = await response.blob();
+      if (!blob.size) return null;
+      const objectUrl = URL.createObjectURL(blob);
+      const kind = response.headers.get("X-Pronunciation-Kind") || "human";
+      return {
+        audio: objectUrl,
+        objectUrl,
+        blob,
+        sourceUrl: normalizePronunciationUrl(response.headers.get("X-Pronunciation-Source")),
+        licenseName: response.headers.get("X-Pronunciation-License") || "",
+        accent: response.headers.get("X-Pronunciation-Accent") || state.settings.accent || "en-US",
+        generated: kind === "azure-tts"
+      };
+    } catch {
+      return null;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  })();
+  cloudPronunciationAssetCache.set(key, request);
+  const result = await request;
+  if (result) {
+    cloudPronunciationAssetCache.set(key, result);
+    trimCloudPronunciationCache();
+  } else {
+    cloudPronunciationAssetCache.delete(key);
+  }
+  return result;
+}
+
 function chooseWikimediaClip(data, word, accentCode) {
   const pages = Array.isArray(data?.query?.pages) ? data.query.pages : [];
   const normalizedWord = word.replace(/_/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
@@ -1724,8 +1784,8 @@ async function getPronunciationClip(text) {
   if (pronunciationCache.has(key)) return pronunciationCache.get(key);
   const isLocalApp = ["127.0.0.1", "localhost"].includes(window.location.hostname);
   const request = isLocalApp
-    ? fetchLocalPronunciation(word)
-    : firstAvailablePronunciation([fetchDictionaryPronunciation(word), fetchWikimediaPronunciation(word)]);
+    ? firstAvailablePronunciation([fetchLocalPronunciation(word), fetchCloudPronunciation(word)])
+    : firstAvailablePronunciation([fetchCloudPronunciation(word), fetchDictionaryPronunciation(word), fetchWikimediaPronunciation(word)]);
   pronunciationCache.set(key, request);
   const clip = await request;
   if (clip) pronunciationCache.set(key, clip);
@@ -1749,6 +1809,7 @@ async function getPronunciationAsset(text) {
   const request = (async () => {
     const clip = await getPronunciationClip(text);
     if (!clip) return null;
+    if (clip.blob && clip.audio) return { clip, audio: new Audio(clip.audio) };
     const audio = new Audio(clip.audio);
     audio.preload = "auto";
     const ready = await new Promise((resolve) => {
@@ -1785,9 +1846,16 @@ async function getWordPronunciationBlob(text) {
   const request = (async () => {
     const clip = await getPronunciationClip(text);
     if (!clip?.audio) throw new Error("这个词暂时没有可用于纠音的标准录音。" );
-    const response = await fetch(clip.audio, { cache: "force-cache" });
-    if (!response.ok) throw new Error("标准发音暂时无法读取。" );
-    return response.blob();
+    if (clip.blob) return clip.blob;
+    try {
+      const response = await fetch(clip.audio, { cache: "force-cache" });
+      if (!response.ok) throw new Error("audio unavailable");
+      return await response.blob();
+    } catch {
+      const cloudClip = await fetchCloudPronunciation(text);
+      if (cloudClip?.blob) return cloudClip.blob;
+      throw new Error("标准发音暂时无法读取。" );
+    }
   })();
   pronunciationBlobCache.set(key, request);
   try {
@@ -1895,9 +1963,9 @@ function renderPronunciationSource(clip) {
   container.removeAttribute("aria-hidden");
   const label = document.createElement("span");
   const accent = clip.accent === "en-US" ? "美音" : clip.accent === "en-GB" ? "英音" : "";
-  label.textContent = clip.fallback ? "设备备用发音" : `真人录音${accent ? ` · ${accent}` : ""}`;
+  label.textContent = clip.fallback ? "设备备用发音" : clip.generated ? `Azure 自然语音${accent ? ` · ${accent}` : ""}` : `真人录音${accent ? ` · ${accent}` : ""}`;
   container.append(label);
-  if (!clip.fallback && clip.sourceUrl) {
+  if (!clip.fallback && !clip.generated && clip.sourceUrl) {
     const source = document.createElement("a");
     source.href = clip.sourceUrl;
     source.target = "_blank";
@@ -2957,6 +3025,35 @@ async function requestCloudTranscription(wavBlob) {
   return text;
 }
 
+async function requestAzurePronunciationAssessment(wavBlob, word) {
+  if (!canUseCloudSpeech()) throw new Error("请先连接 Cloudflare，Azure 密钥需要由它安全保管。" );
+  const params = new URLSearchParams({ reference: word, language: state.settings.accent || "en-US" });
+  const response = await fetch(`${syncConfig.endpoint}/pronunciation-assessment?${params}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${syncConfig.token}`,
+      "Content-Type": "audio/wav"
+    },
+    body: wavBlob
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Azure 发音评测失败（${response.status}）。`);
+  return data;
+}
+
+function renderPhonemeAssessment(phonemes = []) {
+  if (!Array.isArray(phonemes) || !phonemes.length) return "";
+  const chips = phonemes.map((item) => {
+    const score = Math.max(0, Math.min(100, Number(item?.score) || 0));
+    const level = score >= 80 ? "good" : score >= 60 ? "fair" : "weak";
+    const alternatives = Array.isArray(item?.alternatives) && item.alternatives.length
+      ? ` title="可能读成：${escapeHtml(item.alternatives.map((entry) => `${entry.phoneme} ${entry.score}`).join("、"))}"`
+      : "";
+    return `<span class="phoneme-score ${level}"${alternatives}><b>${escapeHtml(item?.phoneme || "?")}</b><small>${score}</small></span>`;
+  }).join("");
+  return `<div class="phoneme-assessment"><p><b>逐音素</b><span>绿色准确，黄色需注意，红色重点纠正</span></p><div>${chips}</div></div>`;
+}
+
 function renderWordPronunciationAssessment() {
   const button = $("#assessWordPronunciation");
   const panel = $("#wordPronunciationResult");
@@ -2980,16 +3077,18 @@ function renderWordPronunciationAssessment() {
     panel.innerHTML = `<p class="pronunciation-error">${escapeHtml(stateValue.error)}</p>`;
     return;
   }
+  const azure = stateValue.provider === "azure";
   panel.innerHTML = `<div class="pronunciation-score-grid">
     <div class="primary"><strong>${Number(stateValue.score) || 0}</strong><span>综合分</span></div>
-    <div><strong>${Number.isFinite(stateValue.soundScore) ? stateValue.soundScore : "—"}</strong><span>声音相似度</span></div>
-    <div><strong>${Number.isFinite(stateValue.rhythmScore) ? stateValue.rhythmScore : "—"}</strong><span>时长与节奏</span></div>
-    <div><strong>${Number.isFinite(stateValue.textScore) ? stateValue.textScore : "—"}</strong><span>读音识别</span></div>
+    <div><strong>${Number.isFinite(stateValue.soundScore) ? stateValue.soundScore : "—"}</strong><span>${azure ? "音素准确度" : "声音相似度"}</span></div>
+    <div><strong>${Number.isFinite(stateValue.rhythmScore) ? stateValue.rhythmScore : "—"}</strong><span>${azure ? "流利度" : "时长与节奏"}</span></div>
+    <div><strong>${Number.isFinite(stateValue.textScore) ? stateValue.textScore : "—"}</strong><span>${azure ? "完整度" : "读音识别"}</span></div>
   </div>
   <p><b>目标音标</b>${currentWord?.phonetic ? `/${escapeHtml(currentWord.phonetic.replace(/^\/?|\/?$/g, ""))}/` : "词库暂无音标"}</p>
   ${stateValue.recognized ? `<p><b>识别到</b>${escapeHtml(stateValue.recognized)}</p>` : ""}
+  ${renderPhonemeAssessment(stateValue.phonemes)}
   <p><b>建议</b>${escapeHtml(pronunciationAdvice(stateValue))}</p>
-  <small>声音相似度会比较频谱、时长与能量节奏；它比只看识别文字更可靠，但仍不是专业音素级测评。</small>`;
+  <small>${azure ? "本次由 Azure Speech 按目标单词进行专业逐音素评测；录音会临时上传至 Azure。" : stateValue.provider === "asr" ? "本次没有可用标准录音，仅按语音识别结果给出基础分；连接 Azure 后可获得逐音素评分。" : "本次在设备上比较标准录音与频谱、时长及能量节奏；连接 Azure 后可获得逐音素评分。"}</small>`;
 }
 
 function stopWordPronunciationAssessment(abort = false, shouldRender = true) {
@@ -3018,19 +3117,41 @@ async function finishWordPronunciationAssessment(recorder, chunks, word, aborted
   try {
     const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
     const wav = await convertRecordingToWav(recorded);
-    const reference = await getWordPronunciationBlob(word);
-    const [acoustic, transcription] = await Promise.all([
-      comparePronunciationAudio(wav, reference),
-      deviceAIConfig.apiKey ? requestCloudTranscription(wav).catch(() => "") : Promise.resolve("")
-    ]);
-    const textScore = transcription ? scoreTextMatch(word, transcription).score : null;
-    const result = {
-      textScore,
-      soundScore: acoustic.soundScore,
-      rhythmScore: acoustic.rhythmScore,
-      score: combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore }),
-      recognized: transcription
-    };
+    let azureError = null;
+    const azureResult = await requestAzurePronunciationAssessment(wav, word).catch((error) => {
+      azureError = error;
+      return null;
+    });
+    let result;
+    if (azureResult) {
+      result = {
+        textScore: Number.isFinite(azureResult.completenessScore) ? azureResult.completenessScore : null,
+        soundScore: Number.isFinite(azureResult.accuracyScore) ? azureResult.accuracyScore : null,
+        rhythmScore: Number.isFinite(azureResult.fluencyScore) ? azureResult.fluencyScore : null,
+        score: Number(azureResult.score) || combinedPronunciationScore({ textScore: azureResult.completenessScore, soundScore: azureResult.accuracyScore, rhythmScore: azureResult.fluencyScore }),
+        recognized: azureResult.recognized || "",
+        phonemes: Array.isArray(azureResult.phonemes) ? azureResult.phonemes : [],
+        errorType: azureResult.errorType || "",
+        provider: "azure"
+      };
+    } else {
+      const [referenceResult, transcription] = await Promise.all([
+        getWordPronunciationBlob(word).then((reference) => comparePronunciationAudio(wav, reference)).catch(() => null),
+        deviceAIConfig.apiKey ? requestCloudTranscription(wav).catch(() => "") : Promise.resolve("")
+      ]);
+      const textScore = transcription ? scoreTextMatch(word, transcription).score : null;
+      if (!referenceResult && !transcription) throw azureError || new Error("这个词没有可用标准录音；请配置 Azure 后再试。" );
+      result = {
+        textScore,
+        soundScore: referenceResult?.soundScore ?? null,
+        rhythmScore: referenceResult?.rhythmScore ?? null,
+        score: combinedPronunciationScore({ textScore, soundScore: referenceResult?.soundScore, rhythmScore: referenceResult?.rhythmScore }),
+        recognized: transcription,
+        phonemes: [],
+        errorType: "",
+        provider: referenceResult ? "local" : "asr"
+      };
+    }
     Object.assign(wordPronunciationAssessment, result, { status: "complete", error: "" });
     state.pronunciationScores[word] = { ...result, assessedAt: new Date().toISOString() };
     const item = state.wordStates[word];
@@ -3049,7 +3170,7 @@ async function startWordPronunciationAssessment() {
   if (!navigator.mediaDevices?.getUserMedia || !("MediaRecorder" in window)) return toast("当前浏览器不支持录音", "请使用最新版 Chrome，并确认网页使用 HTTPS。" );
   stopPronunciationAudio();
   stopWordPronunciationAssessment(true, false);
-  wordPronunciationAssessment = { ...wordPronunciationAssessment, word, status: "starting", recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
+  wordPronunciationAssessment = { ...wordPronunciationAssessment, word, status: "starting", recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, provider: "", phonemes: [], errorType: "", error: "" };
   renderWordPronunciationAssessment();
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -4481,7 +4602,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=39", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=40", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

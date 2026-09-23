@@ -264,6 +264,19 @@ html[data-theme="light"] .pronunciation-player { color-scheme: light; }
 .pronunciation-score-grid strong { color: var(--text); font-size: 1.15rem; }
 .pronunciation-score-grid .primary strong { color: var(--accent); font-size: 1.45rem; }
 .pronunciation-score-grid span { color: var(--muted); font-size: 0.64rem; }
+.phoneme-assessment { display: grid; gap: 8px; }
+.phoneme-assessment > p { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.phoneme-assessment > p span { color: var(--muted); font-size: 0.66rem; }
+.phoneme-assessment > div { display: flex; flex-wrap: wrap; gap: 7px; }
+.phoneme-score { min-width: 44px; display: grid; justify-items: center; gap: 1px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.phoneme-score b { color: var(--text); font-size: 1rem; }
+.phoneme-score small { font-size: 0.62rem; font-weight: 700; }
+.phoneme-score.good { border-color: color-mix(in srgb, #35b779 55%, var(--line)); background: color-mix(in srgb, #35b779 11%, var(--panel)); }
+.phoneme-score.good small { color: #35b779; }
+.phoneme-score.fair { border-color: color-mix(in srgb, #d4a72c 58%, var(--line)); background: color-mix(in srgb, #d4a72c 12%, var(--panel)); }
+.phoneme-score.fair small { color: #c28b12; }
+.phoneme-score.weak { border-color: color-mix(in srgb, var(--danger) 58%, var(--line)); background: color-mix(in srgb, var(--danger) 11%, var(--panel)); }
+.phoneme-score.weak small { color: var(--danger); }
 .pronunciation-processing { color: var(--accent) !important; text-align: center; }
 .pronunciation-error { color: var(--danger) !important; }
 .word-reveal { margin-top: 26px; }

@@ -1,4 +1,5 @@
 const MAX_STATE_BYTES = 1_800_000;
+const MAX_AUDIO_BYTES = 2_500_000;
 const DEFAULT_ORIGINS = [
   "https://maiguojun.github.io",
   "http://127.0.0.1:4174",
@@ -28,10 +29,22 @@ function responseHeaders(request, env) {
     ...(origin ? {
       "Access-Control-Allow-Origin": origin,
       "Access-Control-Allow-Headers": "Authorization, Content-Type",
-      "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, PUT, POST, OPTIONS",
+      "Access-Control-Expose-Headers": "X-Pronunciation-Kind, X-Pronunciation-Accent, X-Pronunciation-Source, X-Pronunciation-License",
       Vary: "Origin"
     } : {})
   };
+}
+
+function audioResponse(request, env, status, body, metadata = {}) {
+  const headers = responseHeaders(request, env);
+  headers["Content-Type"] = metadata.contentType || "audio/mpeg";
+  headers["Cache-Control"] = "private, max-age=86400";
+  if (metadata.kind) headers["X-Pronunciation-Kind"] = metadata.kind;
+  if (metadata.accent) headers["X-Pronunciation-Accent"] = metadata.accent;
+  if (metadata.sourceUrl) headers["X-Pronunciation-Source"] = metadata.sourceUrl;
+  if (metadata.licenseName) headers["X-Pronunciation-License"] = metadata.licenseName;
+  return new Response(body, { status, headers });
 }
 
 function json(request, env, status, value) {
@@ -77,6 +90,242 @@ function validState(value) {
   return value && typeof value === "object" && !Array.isArray(value)
     && value.settings && typeof value.settings === "object"
     && value.wordStates && typeof value.wordStates === "object" && !Array.isArray(value.wordStates);
+}
+
+function safeAudioUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function pronunciationAccent(value) {
+  const clue = String(value || "").toLowerCase();
+  if (/(?:^|[\/_-])(us|usa|american)(?:[\/_.-]|$)/.test(clue)) return "en-US";
+  if (/(?:^|[\/_-])(uk|gb|british)(?:[\/_.-]|$)/.test(clue)) return "en-GB";
+  return "";
+}
+
+function chooseDictionaryPronunciation(entries, preferredAccent) {
+  const clips = (Array.isArray(entries) ? entries : []).flatMap((entry) => (
+    Array.isArray(entry?.phonetics) ? entry.phonetics : []
+  )).map((phonetic) => ({
+    audioUrl: safeAudioUrl(phonetic?.audio),
+    sourceUrl: safeAudioUrl(phonetic?.sourceUrl),
+    licenseName: String(phonetic?.license?.name || "").replace(/[^\x20-\x7E]/g, "").slice(0, 80),
+    accent: pronunciationAccent([phonetic?.audio, phonetic?.sourceUrl, phonetic?.text].filter(Boolean).join(" "))
+  })).filter((clip) => clip.audioUrl);
+  clips.sort((left, right) => {
+    const score = (clip) => clip.accent === preferredAccent ? 3 : clip.accent ? 1 : 2;
+    return score(right) - score(left);
+  });
+  return clips[0] || null;
+}
+
+async function fetchDictionaryPronunciation(word, accent) {
+  try {
+    const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`, {
+      headers: { "User-Agent": "MoguCET4/1.0 personal-learning-app" },
+      signal: AbortSignal.timeout(6500)
+    });
+    if (!response.ok) return null;
+    return chooseDictionaryPronunciation(await response.json(), accent);
+  } catch {
+    return null;
+  }
+}
+
+function chooseWikimediaPronunciation(data, word, accentCode) {
+  const pages = Array.isArray(data?.query?.pages) ? data.query.pages : [];
+  const normalizedWord = word.replace(/_/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  const base = `en-${accentCode}-${normalizedWord}`;
+  const suffixPattern = /^-(stressed|unstressed|noun|verb|adjective|adverb|1|2)$/;
+  const candidates = pages.map((page) => {
+    const info = page?.imageinfo?.[0];
+    const title = String(page?.title || "").replace(/^File:/i, "");
+    const stem = title.replace(/\.(ogg|oga|wav|mp3)$/i, "").replace(/_/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    const suffix = stem.startsWith(base) ? stem.slice(base.length) : "invalid";
+    if (stem !== base && !suffixPattern.test(suffix)) return null;
+    const audioUrl = safeAudioUrl(info?.url);
+    if (!audioUrl || new URL(audioUrl).hostname !== "upload.wikimedia.org") return null;
+    return {
+      audioUrl,
+      sourceUrl: safeAudioUrl(info?.descriptionshorturl || info?.descriptionurl),
+      licenseName: String(info?.extmetadata?.LicenseShortName?.value || "").replace(/<[^>]*>/g, "").replace(/[^\x20-\x7E]/g, "").slice(0, 80),
+      accent: accentCode === "us" ? "en-US" : "en-GB",
+      exact: stem === base
+    };
+  }).filter(Boolean);
+  candidates.sort((left, right) => Number(right.exact) - Number(left.exact));
+  return candidates[0] || null;
+}
+
+async function fetchWikimediaPronunciation(word, accentCode) {
+  const params = new URLSearchParams({
+    action: "query",
+    generator: "search",
+    gsrsearch: `intitle:\"En-${accentCode}-${word}\"`,
+    gsrnamespace: "6",
+    gsrlimit: "12",
+    prop: "imageinfo",
+    iiprop: "url|extmetadata",
+    format: "json",
+    formatversion: "2",
+    origin: "*"
+  });
+  try {
+    const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, {
+      headers: { "User-Agent": "MoguCET4/1.0 personal-learning-app" },
+      signal: AbortSignal.timeout(6500)
+    });
+    if (!response.ok) return null;
+    return chooseWikimediaPronunciation(await response.json(), word, accentCode);
+  } catch {
+    return null;
+  }
+}
+
+async function loadRemoteAudio(clip) {
+  if (!clip?.audioUrl) return null;
+  try {
+    const audioUrl = new URL(clip.audioUrl);
+    const allowedHost = audioUrl.hostname === "upload.wikimedia.org"
+      || audioUrl.hostname === "dictionaryapi.dev"
+      || audioUrl.hostname.endsWith(".dictionaryapi.dev");
+    if (audioUrl.protocol !== "https:" || !allowedHost) return null;
+    const response = await fetch(clip.audioUrl, {
+      headers: { "User-Agent": "MoguCET4/1.0 personal-learning-app" },
+      signal: AbortSignal.timeout(9000)
+    });
+    if (!response.ok) return null;
+    const contentType = response.headers.get("Content-Type") || "audio/mpeg";
+    if (!/^(audio\/|application\/ogg)/i.test(contentType)) return null;
+    const body = await response.arrayBuffer();
+    if (!body.byteLength || body.byteLength > MAX_AUDIO_BYTES) return null;
+    return { body, contentType };
+  } catch {
+    return null;
+  }
+}
+
+function azureSpeechRegion(env) {
+  const region = String(env.AZURE_SPEECH_REGION || "").trim().toLowerCase();
+  return /^[a-z0-9-]{2,40}$/.test(region) ? region : "";
+}
+
+function xmlEscape(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]);
+}
+
+async function synthesizeAzureWord(word, accent, env) {
+  const region = azureSpeechRegion(env);
+  if (!region || !env.AZURE_SPEECH_KEY) return null;
+  const locale = accent === "en-GB" ? "en-GB" : "en-US";
+  const voice = locale === "en-GB" ? "en-GB-SoniaNeural" : "en-US-JennyNeural";
+  const ssml = `<speak version="1.0" xml:lang="${locale}"><voice name="${voice}"><prosody rate="-12%">${xmlEscape(word)}</prosody></voice></speak>`;
+  try {
+    const response = await fetch(`https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
+      method: "POST",
+      headers: {
+        "Ocp-Apim-Subscription-Key": env.AZURE_SPEECH_KEY,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+        "User-Agent": "MoguCET4"
+      },
+      body: ssml,
+      signal: AbortSignal.timeout(12000)
+    });
+    if (!response.ok) return null;
+    const body = await response.arrayBuffer();
+    return body.byteLength && body.byteLength <= MAX_AUDIO_BYTES ? { body, contentType: "audio/mpeg" } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleWordAudio(request, env, url) {
+  const word = String(url.searchParams.get("word") || "").trim().toLowerCase();
+  const accent = url.searchParams.get("accent") === "en-GB" ? "en-GB" : "en-US";
+  if (!/^[a-z][a-z' -]{0,60}$/i.test(word)) return json(request, env, 400, { error: "单词格式不正确" });
+  const preferred = accent === "en-GB" ? "uk" : "us";
+  const alternate = preferred === "us" ? "uk" : "us";
+  const dictionary = await fetchDictionaryPronunciation(word, accent);
+  const humanClip = dictionary || await fetchWikimediaPronunciation(word, preferred) || await fetchWikimediaPronunciation(word, alternate);
+  const humanAudio = await loadRemoteAudio(humanClip);
+  if (humanAudio) return audioResponse(request, env, 200, humanAudio.body, { ...humanClip, ...humanAudio, kind: "human" });
+  const synthesized = await synthesizeAzureWord(word, accent, env);
+  if (synthesized) return audioResponse(request, env, 200, synthesized.body, { ...synthesized, kind: "azure-tts", accent });
+  return json(request, env, 404, { error: "暂时没有找到可用发音" });
+}
+
+function encodeBase64Utf8(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function normalizedAzureAssessment(data) {
+  const best = data?.NBest?.[0];
+  const assessment = best?.PronunciationAssessment || {};
+  const words = Array.isArray(best?.Words) ? best.Words : [];
+  const phonemes = words.flatMap((word) => (Array.isArray(word?.Phonemes) ? word.Phonemes : []).map((phoneme) => ({
+    phoneme: String(phoneme?.Phoneme || ""),
+    score: Math.round(Number(phoneme?.PronunciationAssessment?.AccuracyScore) || 0),
+    alternatives: (Array.isArray(phoneme?.PronunciationAssessment?.NBestPhonemes) ? phoneme.PronunciationAssessment.NBestPhonemes : []).slice(0, 3).map((item) => ({ phoneme: String(item?.Phoneme || ""), score: Math.round(Number(item?.Score) || 0) }))
+  })).filter((item) => item.phoneme));
+  return {
+    recognized: String(best?.Display || data?.DisplayText || "").trim(),
+    score: Math.round(Number(assessment.PronScore) || 0),
+    accuracyScore: Math.round(Number(assessment.AccuracyScore) || 0),
+    fluencyScore: Math.round(Number(assessment.FluencyScore) || 0),
+    completenessScore: Math.round(Number(assessment.CompletenessScore) || 0),
+    errorType: String(words[0]?.PronunciationAssessment?.ErrorType || "None"),
+    phonemes
+  };
+}
+
+async function handlePronunciationAssessment(request, env, url) {
+  const reference = String(url.searchParams.get("reference") || "").trim().toLowerCase();
+  const language = url.searchParams.get("language") === "en-GB" ? "en-GB" : "en-US";
+  const region = azureSpeechRegion(env);
+  if (!region || !env.AZURE_SPEECH_KEY) return json(request, env, 503, { error: "Azure 发音评测尚未配置" });
+  if (!/^[a-z][a-z' -]{0,60}$/i.test(reference)) return json(request, env, 400, { error: "目标单词格式不正确" });
+  const contentLength = Number(request.headers.get("Content-Length") || 0);
+  if (contentLength > MAX_AUDIO_BYTES) return json(request, env, 413, { error: "录音过大，请缩短后再试" });
+  const audio = await request.arrayBuffer();
+  if (!audio.byteLength || audio.byteLength > MAX_AUDIO_BYTES) return json(request, env, 400, { error: "录音内容为空或过大" });
+  const config = encodeBase64Utf8(JSON.stringify({
+    ReferenceText: reference,
+    GradingSystem: "HundredMark",
+    Granularity: "Phoneme",
+    Dimension: "Comprehensive",
+    EnableMiscue: true,
+    PhonemeAlphabet: "IPA",
+    NBestPhonemeCount: 5
+  }));
+  try {
+    const upstream = await fetch(`https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=${language}&format=detailed`, {
+      method: "POST",
+      headers: {
+        "Ocp-Apim-Subscription-Key": env.AZURE_SPEECH_KEY,
+        "Pronunciation-Assessment": config,
+        "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000",
+        Accept: "application/json"
+      },
+      body: audio,
+      signal: AbortSignal.timeout(20000)
+    });
+    const data = await upstream.json().catch(() => ({}));
+    if (!upstream.ok) return json(request, env, upstream.status === 429 ? 429 : 502, { error: upstream.status === 429 ? "Azure 免费额度或请求频率已达到上限" : "Azure 暂时无法完成发音评测" });
+    const result = normalizedAzureAssessment(data);
+    if (!result.score && !result.recognized) return json(request, env, 422, { error: "Azure 没有识别到清晰发音" });
+    return json(request, env, 200, result);
+  } catch {
+    return json(request, env, 504, { error: "Azure 发音评测连接超时" });
+  }
 }
 
 async function updateState(request, env) {
@@ -128,10 +377,12 @@ export default {
 
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") {
-      return json(request, env, 200, { ok: true, service: "mogu-cet4-sync" });
+      return json(request, env, 200, { ok: true, service: "mogu-cet4-sync", azureSpeech: Boolean(azureSpeechRegion(env) && env.AZURE_SPEECH_KEY) });
     }
-    if (url.pathname !== "/sync") return json(request, env, 404, { error: "Not found" });
     if (!await authorized(request, env)) return json(request, env, 401, { error: "同步密码不正确" });
+    if (url.pathname === "/word-audio" && request.method === "GET") return handleWordAudio(request, env, url);
+    if (url.pathname === "/pronunciation-assessment" && request.method === "POST") return handlePronunciationAssessment(request, env, url);
+    if (url.pathname !== "/sync") return json(request, env, 404, { error: "Not found" });
     if (request.method === "GET") return json(request, env, 200, await currentState(env));
     if (request.method === "PUT") return updateState(request, env);
     return json(request, env, 405, { error: "Method not allowed" });

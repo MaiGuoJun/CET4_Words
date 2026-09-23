@@ -23,6 +23,18 @@
 
 单词会优先播放在线词典提供的真人录音，并按设置选择美音或英音；没有对应录音、离线或播放失败时，自动改用设备系统声音。真人录音功能不需要 API Key，但使用时需要联网。
 
+连接 Cloudflare 同步服务后，Pages 版会通过 Worker 代取真人录音，避免手机浏览器因跨域或音频站点连接失败而无法播放。配置 Azure Speech 后，没有真人录音的词会改用明确标注的 Azure 自然语音；跟读纠音会直接返回逐音素准确度、流利度和完整度，不再依赖标准录音是否存在。Azure 密钥只保存在 Worker Secret 中，不能写入网页或仓库。
+
+Azure Speech 接入需要在 `cloudflare` 目录配置：
+
+```powershell
+npx wrangler secret put AZURE_SPEECH_KEY
+npx wrangler secret put AZURE_SPEECH_REGION
+npx wrangler deploy
+```
+
+例如资源区域可能是 `eastasia` 或 `southeastasia`，必须以 Azure“密钥和终结点”页面显示的区域为准。Worker 的 `/health` 会返回 `azureSpeech: true` 表示配置成功。
+
 ## 本地运行
 
 项目带有一个不依赖第三方软件包的本机服务。它会打开 `dist` 静态站点，把 AI 请求安全转发给智谱或本机 Ollama，并代为获取真人发音录音：
