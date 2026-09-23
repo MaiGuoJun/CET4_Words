@@ -2427,8 +2427,14 @@ function naturalSpeechEnabled() {
   return Boolean(deviceAIConfig.apiKey && deviceAIConfig.speechVoice && deviceAIConfig.speechVoice !== "system");
 }
 
-function wrapPcm16AsWav(base64, sampleRate = 44100) {
+function voiceAudioBlobFromBase64(base64, fallbackSampleRate = 22050) {
   const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  const isWav = binary.length >= 12 && binary.slice(0, 4) === "RIFF" && binary.slice(8, 12) === "WAVE";
+  if (isWav) return new Blob([bytes], { type: "audio/wav" });
+
+  const sampleRate = fallbackSampleRate;
   const buffer = new ArrayBuffer(44 + binary.length);
   const view = new DataView(buffer);
   const writeAscii = (offset, value) => {
@@ -2447,7 +2453,7 @@ function wrapPcm16AsWav(base64, sampleRate = 44100) {
   view.setUint16(34, 16, true);
   writeAscii(36, "data");
   view.setUint32(40, binary.length, true);
-  for (let index = 0; index < binary.length; index += 1) view.setUint8(44 + index, binary.charCodeAt(index));
+  new Uint8Array(buffer, 44).set(bytes);
   return new Blob([buffer], { type: "audio/wav" });
 }
 
@@ -2481,7 +2487,7 @@ async function requestNaturalSpeech(text) {
   }
   const audioBase64 = String(data?.choices?.[0]?.message?.audio?.data || "");
   if (!audioBase64) throw new Error("智谱没有返回有效音频。" );
-  return wrapPcm16AsWav(audioBase64);
+  return voiceAudioBlobFromBase64(audioBase64);
 }
 
 function speakTextWithSystem(text, messageIndex) {
@@ -3346,7 +3352,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=34", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=35", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
