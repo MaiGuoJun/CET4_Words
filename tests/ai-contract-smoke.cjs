@@ -27,6 +27,10 @@ requireText(html, 'id="listeningWordQueue"', "listening SRS queue");
 requireText(app, "data-ai-shadow-index", "shadowing control");
 requireText(app, "listeningWordStates", "separate listening SRS state");
 requireText(server, 'body.task === "writing"', "server writing review route");
-requireText(html, "app.js?v=38", "v38 script cache bust");
+requireText(app, "comparePronunciationAudio", "acoustic pronunciation comparison");
+requireText(app, "soundScore", "acoustic score component");
+requireText(app, "rhythmScore", "rhythm score component");
+requireText(html, 'id="assessWordPronunciation"', "word pronunciation assessment control");
+requireText(html, "app.js?v=39", "v39 script cache bust");
 
 console.log("AI contract smoke test passed");

@@ -157,6 +157,7 @@ const defaultState = () => ({
     presumedKnown: 3000
   },
   wordStates: {},
+  pronunciationScores: {},
   listeningWordStates: {},
   listeningProgress: {},
   daily: {},
@@ -192,6 +193,7 @@ let loopB = null;
 let dictationState = { sentences: [], index: 0, result: null };
 const pronunciationCache = new Map();
 const pronunciationAssetCache = new Map();
+const pronunciationBlobCache = new Map();
 let pronunciationAudio = null;
 let pronunciationRequestId = 0;
 let pronunciationAudioContext = null;
@@ -202,7 +204,9 @@ let aiServiceInfo = null;
 let aiBackendAvailable = false;
 let deviceAIConfig = loadDeviceAIConfig();
 let aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: false, messageIndex: null };
-let shadowingState = { messageIndex: null, status: "idle", recognition: null, mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", score: null, error: "" };
+let shadowingState = { messageIndex: null, status: "idle", recognition: null, mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
+let wordPronunciationAssessment = { word: "", status: "idle", mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
+const ttsAssessmentCache = new Map();
 const visibleAITranslations = new Set();
 let voiceSession = {
   state: "idle",
@@ -263,6 +267,7 @@ function normalizeState(parsed) {
     ...parsed,
     settings: { ...base.settings, ...(parsed.settings || {}) },
     wordStates: parsed.wordStates && typeof parsed.wordStates === "object" ? parsed.wordStates : {},
+    pronunciationScores: parsed.pronunciationScores && typeof parsed.pronunciationScores === "object" ? parsed.pronunciationScores : {},
     listeningWordStates: parsed.listeningWordStates && typeof parsed.listeningWordStates === "object" ? parsed.listeningWordStates : {},
     listeningProgress: parsed.listeningProgress && typeof parsed.listeningProgress === "object" ? parsed.listeningProgress : {},
     daily: parsed.daily && typeof parsed.daily === "object" ? parsed.daily : {},
@@ -351,7 +356,7 @@ function normalizeSyncEndpoint(value) {
 }
 
 function itemTimestamp(item) {
-  return Math.max(...[item?.updatedAt, item?.lastReviewedAt, item?.learnedAt, item?.screenedAt, item?.completedAt]
+  return Math.max(...[item?.updatedAt, item?.assessedAt, item?.lastReviewedAt, item?.learnedAt, item?.screenedAt, item?.completedAt]
     .map((value) => Date.parse(value || "") || 0));
 }
 
@@ -381,6 +386,15 @@ function mergeCloudStates(localState, remoteState) {
     if (!localItem) listeningWordStates[word] = remoteItem;
     else if (!remoteItem) listeningWordStates[word] = localItem;
     else listeningWordStates[word] = itemTimestamp(localItem) >= itemTimestamp(remoteItem) ? localItem : remoteItem;
+  }
+
+  const pronunciationScores = {};
+  for (const word of new Set([...Object.keys(remote.pronunciationScores), ...Object.keys(local.pronunciationScores)])) {
+    const localItem = local.pronunciationScores[word];
+    const remoteItem = remote.pronunciationScores[word];
+    if (!localItem) pronunciationScores[word] = remoteItem;
+    else if (!remoteItem) pronunciationScores[word] = localItem;
+    else pronunciationScores[word] = itemTimestamp(localItem) >= itemTimestamp(remoteItem) ? localItem : remoteItem;
   }
 
   const listeningProgress = {};
@@ -418,6 +432,7 @@ function mergeCloudStates(localState, remoteState) {
     ...primary,
     settings: primary.settings,
     wordStates,
+    pronunciationScores,
     listeningWordStates,
     listeningProgress,
     daily,
@@ -1339,6 +1354,7 @@ function stabilizeStudyWorkspace() {
 }
 
 function renderCurrentWord() {
+  stopWordPronunciationAssessment(true, false);
   stopPronunciationAudio();
   resetNativePronunciationPlayer();
   renderPronunciationSource(null);
@@ -1350,6 +1366,10 @@ function renderCurrentWord() {
   renderWordLevel(currentWord);
   setPronunciationButton("idle");
   const item = getWordState(currentWord);
+  const savedPronunciation = state.pronunciationScores[currentWord.word];
+  wordPronunciationAssessment = savedPronunciation
+    ? { ...wordPronunciationAssessment, ...savedPronunciation, word: currentWord.word, status: "complete", error: "" }
+    : { ...wordPronunciationAssessment, word: currentWord.word, status: "idle", recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
   $("#wordText").textContent = currentWord.word;
   $("#wordPhonetic").textContent = currentWord.phonetic ? `/${currentWord.phonetic.replace(/^\/?|\/?$/g, "")}/` : "";
   renderWordMeanings(currentWord);
@@ -1369,10 +1389,12 @@ function renderCurrentWord() {
   renderWordPhrases(currentWord);
   renderWordInsights(currentWord);
   void prepareCurrentPronunciation(currentWord.word);
+  renderWordPronunciationAssessment();
   replayMotion($("#wordWorkspace"), "word-enter");
 }
 
 function renderEmptyStudy() {
+  stopWordPronunciationAssessment(true, false);
   stopPronunciationAudio();
   resetNativePronunciationPlayer();
   renderPronunciationSource(null);
@@ -1391,6 +1413,7 @@ function renderEmptyStudy() {
   $("#wordToolContent")?.replaceChildren();
   if ($("#wordTools")) $("#wordTools").hidden = true;
   setPronunciationButton("idle");
+  renderWordPronunciationAssessment();
 }
 
 function revealCurrentWord() {
@@ -1754,6 +1777,27 @@ async function getPronunciationAsset(text) {
     pronunciationAssetCache.delete(key);
   }
   return asset;
+}
+
+async function getWordPronunciationBlob(text) {
+  const key = pronunciationCacheKey(text);
+  if (pronunciationBlobCache.has(key)) return pronunciationBlobCache.get(key);
+  const request = (async () => {
+    const clip = await getPronunciationClip(text);
+    if (!clip?.audio) throw new Error("这个词暂时没有可用于纠音的标准录音。" );
+    const response = await fetch(clip.audio, { cache: "force-cache" });
+    if (!response.ok) throw new Error("标准发音暂时无法读取。" );
+    return response.blob();
+  })();
+  pronunciationBlobCache.set(key, request);
+  try {
+    const blob = await request;
+    pronunciationBlobCache.set(key, blob);
+    return blob;
+  } catch (error) {
+    pronunciationBlobCache.delete(key);
+    throw error;
+  }
 }
 
 async function prepareCurrentPronunciation(text) {
@@ -2434,7 +2478,7 @@ function renderShadowingResult(message, index) {
   if (active && shadowingState.error) return `<div class="shadowing-result error">${escapeHtml(shadowingState.error)}</div>`;
   const result = active && shadowingState.status === "complete" ? shadowingState : message?.shadowing;
   if (!result) return "";
-  return `<div class="shadowing-result"><div><strong>${Number(result.score) || 0}</strong><span>识别匹配分</span></div><p><b>识别到：</b>${escapeHtml(result.recognized || "未识别到内容")}</p><small>这是文字识别匹配度，不等同于专业的音素、重音和语调评分。</small></div>`;
+  return `<div class="shadowing-result"><div><strong>${Number(result.score) || 0}</strong><span>综合跟读分</span></div><div class="shadowing-score-parts"><span>内容 ${Number.isFinite(result.textScore) ? result.textScore : "—"}</span><span>发音相似度 ${Number.isFinite(result.soundScore) ? result.soundScore : "—"}</span><span>节奏 ${Number.isFinite(result.rhythmScore) ? result.rhythmScore : "—"}</span></div><p><b>识别到：</b>${escapeHtml(result.recognized || "未启用文字识别")}</p><p><b>建议：</b>${escapeHtml(pronunciationAdvice(result))}</p><small>综合分同时比较识别文字、声音频谱、时长与能量节奏；仍不等同于专业逐音素测评。</small></div>`;
 }
 
 function renderWritingReview() {
@@ -2755,6 +2799,142 @@ async function convertRecordingToWav(blob) {
   }
 }
 
+async function decodeAudioSamples(blob) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) throw new Error("当前浏览器无法分析录音。" );
+  const context = new AudioContextClass();
+  try {
+    const decoded = await context.decodeAudioData((await blob.arrayBuffer()).slice(0));
+    const channels = decoded.numberOfChannels;
+    const mono = new Float32Array(decoded.length);
+    for (let channel = 0; channel < channels; channel += 1) {
+      const data = decoded.getChannelData(channel);
+      for (let index = 0; index < data.length; index += 1) mono[index] += data[index] / channels;
+    }
+    return { samples: mono, sampleRate: decoded.sampleRate };
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+function trimVoiceSamples(samples, sampleRate) {
+  const windowSize = Math.max(64, Math.floor(sampleRate * 0.02));
+  const levels = [];
+  let maximum = 0;
+  for (let start = 0; start < samples.length; start += windowSize) {
+    let sum = 0;
+    const end = Math.min(samples.length, start + windowSize);
+    for (let index = start; index < end; index += 1) sum += samples[index] * samples[index];
+    const rms = Math.sqrt(sum / Math.max(1, end - start));
+    levels.push(rms);
+    maximum = Math.max(maximum, rms);
+  }
+  if (maximum < 0.004) throw new Error("录音声音太小，请靠近麦克风再读一次。" );
+  const threshold = Math.max(0.004, maximum * 0.12);
+  let first = levels.findIndex((level) => level >= threshold);
+  let last = levels.length - 1;
+  while (last > first && levels[last] < threshold) last -= 1;
+  if (first < 0) throw new Error("没有检测到清晰人声。" );
+  first = Math.max(0, first - 1);
+  last = Math.min(levels.length - 1, last + 1);
+  return samples.slice(first * windowSize, Math.min(samples.length, (last + 1) * windowSize));
+}
+
+function goertzelPower(samples, start, size, sampleRate, frequency) {
+  const coefficient = 2 * Math.cos((2 * Math.PI * frequency) / sampleRate);
+  let previous = 0;
+  let beforePrevious = 0;
+  for (let offset = 0; offset < size; offset += 1) {
+    const index = start + offset;
+    const sample = (samples[index] || 0) * (0.54 - 0.46 * Math.cos((2 * Math.PI * offset) / Math.max(1, size - 1)));
+    const current = sample + coefficient * previous - beforePrevious;
+    beforePrevious = previous;
+    previous = current;
+  }
+  return Math.max(1e-10, previous * previous + beforePrevious * beforePrevious - coefficient * previous * beforePrevious);
+}
+
+function extractPronunciationFeatures(input, sampleRate) {
+  const samples = trimVoiceSamples(input, sampleRate);
+  const duration = samples.length / sampleRate;
+  const frameSize = Math.max(128, Math.floor(sampleRate * 0.025));
+  const naturalHop = Math.max(64, Math.floor(sampleRate * 0.0125));
+  const hop = Math.max(naturalHop, Math.ceil(Math.max(1, samples.length - frameSize) / 160));
+  const frequencies = [220, 330, 480, 680, 950, 1300, 1750, 2300, 3000, 3900];
+  const frames = [];
+  for (let start = 0; start + frameSize <= samples.length; start += hop) {
+    let sum = 0;
+    let crossings = 0;
+    for (let offset = 0; offset < frameSize; offset += 1) {
+      const value = samples[start + offset];
+      sum += value * value;
+      if (offset && (value >= 0) !== (samples[start + offset - 1] >= 0)) crossings += 1;
+    }
+    const rms = Math.sqrt(sum / frameSize);
+    const spectrum = frequencies.map((frequency) => Math.log1p(goertzelPower(samples, start, frameSize, sampleRate, frequency)));
+    const norm = Math.sqrt(spectrum.reduce((total, value) => total + value * value, 0)) || 1;
+    frames.push({ spectrum: spectrum.map((value) => value / norm), energy: Math.log1p(rms * 100), zcr: crossings / frameSize });
+  }
+  if (frames.length < 2 || duration < 0.12) throw new Error("录音太短，请把目标内容完整读完。" );
+  const maxEnergy = Math.max(...frames.map((frame) => frame.energy), 0.001);
+  frames.forEach((frame) => { frame.energy /= maxEnergy; });
+  return { frames, duration };
+}
+
+function dtwAverage(left, right, distance) {
+  const rows = left.length;
+  const columns = right.length;
+  const previous = new Float64Array(columns + 1).fill(Infinity);
+  const current = new Float64Array(columns + 1).fill(Infinity);
+  previous[0] = 0;
+  const band = Math.max(8, Math.ceil(Math.max(rows, columns) * 0.45));
+  for (let i = 1; i <= rows; i += 1) {
+    current.fill(Infinity);
+    const center = Math.round((i / rows) * columns);
+    const from = Math.max(1, center - band);
+    const to = Math.min(columns, center + band);
+    for (let j = from; j <= to; j += 1) current[j] = distance(left[i - 1], right[j - 1]) + Math.min(previous[j], current[j - 1], previous[j - 1]);
+    previous.set(current);
+  }
+  return previous[columns] / Math.max(rows, columns);
+}
+
+function scorePronunciationFeatures(learner, reference) {
+  const acousticDistance = dtwAverage(learner.frames, reference.frames, (left, right) => {
+    const cosine = left.spectrum.reduce((total, value, index) => total + value * right.spectrum[index], 0);
+    return Math.max(0, 1 - cosine) * 0.7 + Math.abs(left.energy - right.energy) * 0.18 + Math.min(1, Math.abs(left.zcr - right.zcr) * 8) * 0.12;
+  });
+  const envelopeDistance = dtwAverage(learner.frames, reference.frames, (left, right) => Math.abs(left.energy - right.energy));
+  const durationRatio = Math.min(learner.duration, reference.duration) / Math.max(learner.duration, reference.duration);
+  const soundScore = Math.round(Math.max(0, Math.min(100, 104 - acousticDistance * 150)));
+  const rhythmScore = Math.round(Math.max(0, Math.min(100, durationRatio * 60 + (1 - Math.min(1, envelopeDistance)) * 40)));
+  return { soundScore, rhythmScore, learnerDuration: learner.duration, referenceDuration: reference.duration };
+}
+
+async function comparePronunciationAudio(learnerBlob, referenceBlob) {
+  const [learnerAudio, referenceAudio] = await Promise.all([decodeAudioSamples(learnerBlob), decodeAudioSamples(referenceBlob)]);
+  const learner = extractPronunciationFeatures(learnerAudio.samples, learnerAudio.sampleRate);
+  const reference = extractPronunciationFeatures(referenceAudio.samples, referenceAudio.sampleRate);
+  return scorePronunciationFeatures(learner, reference);
+}
+
+function combinedPronunciationScore({ textScore, soundScore, rhythmScore, sentence = false }) {
+  const values = [];
+  if (Number.isFinite(textScore)) values.push([textScore, sentence ? 0.45 : 0.3]);
+  if (Number.isFinite(soundScore)) values.push([soundScore, sentence ? 0.4 : 0.55]);
+  if (Number.isFinite(rhythmScore)) values.push([rhythmScore, 0.15]);
+  const totalWeight = values.reduce((total, [, weight]) => total + weight, 0);
+  return totalWeight ? Math.round(values.reduce((total, [value, weight]) => total + value * weight, 0) / totalWeight) : 0;
+}
+
+function pronunciationAdvice({ textScore, soundScore, rhythmScore }) {
+  const advice = [];
+  if (Number.isFinite(textScore) && textScore < 80) advice.push("读音可能改变了单词或漏读；对照音标逐段慢读。" );
+  if (Number.isFinite(soundScore) && soundScore < 70) advice.push("音色轨迹与标准音差异较大，重点检查元音是否饱满、辅音是否到位。" );
+  if (Number.isFinite(rhythmScore) && rhythmScore < 70) advice.push("时长或轻重节奏偏差较大，先听标准音，再模仿停连与重音。" );
+  return advice[0] || "整体接近标准音，可以尝试用自然语速再读一次。";
+}
+
 async function requestCloudTranscription(wavBlob) {
   if (!deviceAIConfig.apiKey) throw new Error("请先在设置中保存智谱 API Key。" );
   const form = new FormData();
@@ -2775,6 +2955,135 @@ async function requestCloudTranscription(wavBlob) {
   const text = String(data?.text || "").trim();
   if (!text) throw new Error("没有识别到清晰语音，请靠近麦克风再试。" );
   return text;
+}
+
+function renderWordPronunciationAssessment() {
+  const button = $("#assessWordPronunciation");
+  const panel = $("#wordPronunciationResult");
+  if (!button || !panel) return;
+  const stateValue = wordPronunciationAssessment;
+  const activeWord = currentWord?.word || "";
+  button.disabled = !activeWord || ["starting", "processing"].includes(stateValue.status);
+  button.classList.toggle("recording", stateValue.status === "recording");
+  button.textContent = stateValue.status === "starting" ? "正在启动麦克风…" : stateValue.status === "recording" ? "■ 结束并评分" : stateValue.status === "processing" ? "正在分析发音…" : "◉ 跟读纠音";
+  if (!activeWord || stateValue.word !== activeWord || stateValue.status === "idle") {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  if (["starting", "recording", "processing"].includes(stateValue.status)) {
+    panel.innerHTML = `<p class="pronunciation-processing">${stateValue.status === "recording" ? `请读：${escapeHtml(activeWord)} ${currentWord?.phonetic ? `/${escapeHtml(currentWord.phonetic.replace(/^\/?|\/?$/g, ""))}/` : ""}` : stateValue.status === "processing" ? "正在比较你的录音与标准发音…" : "正在请求麦克风权限…"}</p>`;
+    return;
+  }
+  if (stateValue.error) {
+    panel.innerHTML = `<p class="pronunciation-error">${escapeHtml(stateValue.error)}</p>`;
+    return;
+  }
+  panel.innerHTML = `<div class="pronunciation-score-grid">
+    <div class="primary"><strong>${Number(stateValue.score) || 0}</strong><span>综合分</span></div>
+    <div><strong>${Number.isFinite(stateValue.soundScore) ? stateValue.soundScore : "—"}</strong><span>声音相似度</span></div>
+    <div><strong>${Number.isFinite(stateValue.rhythmScore) ? stateValue.rhythmScore : "—"}</strong><span>时长与节奏</span></div>
+    <div><strong>${Number.isFinite(stateValue.textScore) ? stateValue.textScore : "—"}</strong><span>读音识别</span></div>
+  </div>
+  <p><b>目标音标</b>${currentWord?.phonetic ? `/${escapeHtml(currentWord.phonetic.replace(/^\/?|\/?$/g, ""))}/` : "词库暂无音标"}</p>
+  ${stateValue.recognized ? `<p><b>识别到</b>${escapeHtml(stateValue.recognized)}</p>` : ""}
+  <p><b>建议</b>${escapeHtml(pronunciationAdvice(stateValue))}</p>
+  <small>声音相似度会比较频谱、时长与能量节奏；它比只看识别文字更可靠，但仍不是专业音素级测评。</small>`;
+}
+
+function stopWordPronunciationAssessment(abort = false, shouldRender = true) {
+  clearTimeout(wordPronunciationAssessment.stopTimer);
+  wordPronunciationAssessment.stopTimer = null;
+  if (wordPronunciationAssessment.mediaRecorder) {
+    wordPronunciationAssessment.abortRecording = abort;
+    try { if (wordPronunciationAssessment.mediaRecorder.state !== "inactive") wordPronunciationAssessment.mediaRecorder.stop(); } catch {}
+  }
+  if (abort) {
+    wordPronunciationAssessment.mediaStream?.getTracks().forEach((track) => track.stop());
+    wordPronunciationAssessment.mediaStream = null;
+    wordPronunciationAssessment.mediaRecorder = null;
+    wordPronunciationAssessment.status = "idle";
+  }
+  if (shouldRender) renderWordPronunciationAssessment();
+}
+
+async function finishWordPronunciationAssessment(recorder, chunks, word, aborted) {
+  if (wordPronunciationAssessment.mediaRecorder === recorder) wordPronunciationAssessment.mediaRecorder = null;
+  wordPronunciationAssessment.mediaStream?.getTracks().forEach((track) => track.stop());
+  wordPronunciationAssessment.mediaStream = null;
+  if (aborted || wordPronunciationAssessment.word !== word) return;
+  wordPronunciationAssessment.status = "processing";
+  renderWordPronunciationAssessment();
+  try {
+    const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    const wav = await convertRecordingToWav(recorded);
+    const reference = await getWordPronunciationBlob(word);
+    const [acoustic, transcription] = await Promise.all([
+      comparePronunciationAudio(wav, reference),
+      deviceAIConfig.apiKey ? requestCloudTranscription(wav).catch(() => "") : Promise.resolve("")
+    ]);
+    const textScore = transcription ? scoreTextMatch(word, transcription).score : null;
+    const result = {
+      textScore,
+      soundScore: acoustic.soundScore,
+      rhythmScore: acoustic.rhythmScore,
+      score: combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore }),
+      recognized: transcription
+    };
+    Object.assign(wordPronunciationAssessment, result, { status: "complete", error: "" });
+    state.pronunciationScores[word] = { ...result, assessedAt: new Date().toISOString() };
+    const item = state.wordStates[word];
+    if (item && result.score >= 80) item.audioVerified = true;
+    saveState();
+  } catch (error) {
+    wordPronunciationAssessment.status = "error";
+    wordPronunciationAssessment.error = error.message || "发音分析失败，请再试一次。";
+  }
+  renderWordPronunciationAssessment();
+}
+
+async function startWordPronunciationAssessment() {
+  const word = currentWord?.word;
+  if (!word) return;
+  if (!navigator.mediaDevices?.getUserMedia || !("MediaRecorder" in window)) return toast("当前浏览器不支持录音", "请使用最新版 Chrome，并确认网页使用 HTTPS。" );
+  stopPronunciationAudio();
+  stopWordPronunciationAssessment(true, false);
+  wordPronunciationAssessment = { ...wordPronunciationAssessment, word, status: "starting", recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
+  renderWordPronunciationAssessment();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    if (currentWord?.word !== word) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks = [];
+    wordPronunciationAssessment.mediaRecorder = recorder;
+    wordPronunciationAssessment.mediaStream = stream;
+    wordPronunciationAssessment.mediaChunks = chunks;
+    wordPronunciationAssessment.abortRecording = false;
+    wordPronunciationAssessment.status = "recording";
+    recorder.addEventListener("dataavailable", (event) => { if (event.data?.size) chunks.push(event.data); });
+    recorder.addEventListener("stop", () => {
+      const aborted = wordPronunciationAssessment.abortRecording;
+      wordPronunciationAssessment.abortRecording = false;
+      void finishWordPronunciationAssessment(recorder, chunks, word, aborted);
+    }, { once: true });
+    recorder.start(200);
+    wordPronunciationAssessment.stopTimer = window.setTimeout(() => stopWordPronunciationAssessment(false), 7000);
+    renderWordPronunciationAssessment();
+  } catch (error) {
+    wordPronunciationAssessment.status = "error";
+    wordPronunciationAssessment.error = error?.name === "NotAllowedError" ? "没有获得麦克风权限，请在浏览器网站设置中允许麦克风。" : error.message || "无法启动录音。";
+    renderWordPronunciationAssessment();
+  }
+}
+
+function toggleWordPronunciationAssessment() {
+  if (wordPronunciationAssessment.status === "recording") stopWordPronunciationAssessment(false);
+  else void startWordPronunciationAssessment();
 }
 
 async function finishCloudTextDictation(recorder, chunks, input, baseText, aborted) {
@@ -2934,15 +3243,42 @@ function toggleTextDictation() {
   else startTextDictation();
 }
 
-function finishShadowingScore(messageIndex, recognized) {
+async function getShadowingReferenceBlob(text) {
+  const key = String(text || "").trim();
+  if (ttsAssessmentCache.has(key)) return ttsAssessmentCache.get(key);
+  const request = requestAssessmentSpeech(key);
+  ttsAssessmentCache.set(key, request);
+  try {
+    const blob = await request;
+    ttsAssessmentCache.set(key, blob);
+    while (ttsAssessmentCache.size > 12) ttsAssessmentCache.delete(ttsAssessmentCache.keys().next().value);
+    return blob;
+  } catch (error) {
+    ttsAssessmentCache.delete(key);
+    throw error;
+  }
+}
+
+async function finishShadowingScore(messageIndex, recognized, learnerWav = null) {
   const message = currentAISession()[messageIndex];
   if (!message || shadowingState.messageIndex !== messageIndex) return;
-  const result = scoreTextMatch(message.content, recognized);
+  const textScore = recognized ? scoreTextMatch(message.content, recognized).score : null;
+  let acoustic = { soundScore: null, rhythmScore: null };
+  if (learnerWav) {
+    const reference = await getShadowingReferenceBlob(message.content);
+    acoustic = await comparePronunciationAudio(learnerWav, reference);
+  }
+  const result = {
+    textScore,
+    soundScore: acoustic.soundScore,
+    rhythmScore: acoustic.rhythmScore,
+    score: combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore, sentence: true }),
+    recognized
+  };
   shadowingState.status = "complete";
-  shadowingState.recognized = recognized;
-  shadowingState.score = result.score;
+  Object.assign(shadowingState, result);
   shadowingState.error = "";
-  message.shadowing = { score: result.score, recognized, createdAt: new Date().toISOString() };
+  message.shadowing = { ...result, createdAt: new Date().toISOString() };
   saveState();
   renderAI();
 }
@@ -2977,8 +3313,8 @@ async function finishCloudShadowing(recorder, chunks, messageIndex, aborted) {
   try {
     const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
     const wav = await convertRecordingToWav(recorded);
-    const recognized = await requestCloudTranscription(wav);
-    finishShadowingScore(messageIndex, recognized);
+    const recognized = deviceAIConfig.apiKey ? await requestCloudTranscription(wav).catch(() => "") : "";
+    await finishShadowingScore(messageIndex, recognized, wav);
   } catch (error) {
     shadowingState.status = "error";
     shadowingState.error = error.message || "跟读识别失败，请重试。";
@@ -3038,7 +3374,7 @@ function startBrowserShadowing(messageIndex) {
   });
   recognition.addEventListener("end", () => {
     if (shadowingState.recognition === recognition) shadowingState.recognition = null;
-    if (shadowingState.status !== "error") finishShadowingScore(messageIndex, finalText.trim() || shadowingState.recognized);
+    if (shadowingState.status !== "error") void finishShadowingScore(messageIndex, finalText.trim() || shadowingState.recognized);
   });
   recognition.start();
   renderAI();
@@ -3052,14 +3388,19 @@ function toggleShadowing(messageIndex) {
   stopAITextSpeech();
   if (textDictation.listening) stopTextDictation(true);
   stopShadowing(true, false);
-  shadowingState = { ...shadowingState, messageIndex, status: "starting", recognized: "", score: null, error: "" };
+  shadowingState = { ...shadowingState, messageIndex, status: "starting", recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
+  if (!deviceAIConfig.apiKey) {
+    shadowingState.status = "error";
+    shadowingState.error = "发音评分需要在设置中保存智谱 API Key，用于生成同一句标准语音并完成声音比较。";
+    renderAI();
+    return;
+  }
   try {
-    if (deviceAIConfig.apiKey && deviceAIConfig.speechInput === "glm-asr") void startCloudShadowing(messageIndex).catch((error) => {
+    void startCloudShadowing(messageIndex).catch((error) => {
       shadowingState.status = "error";
       shadowingState.error = error.message || "无法启动跟读录音。";
       renderAI();
     });
-    else startBrowserShadowing(messageIndex);
   } catch (error) {
     shadowingState.status = "error";
     shadowingState.error = error.message || "无法启动跟读识别。";
@@ -3104,8 +3445,8 @@ function naturalSpeechEnabled() {
   return Boolean(deviceAIConfig.apiKey && deviceAIConfig.speechVoice && deviceAIConfig.speechVoice !== "system");
 }
 
-async function requestNaturalSpeech(text) {
-  if (!naturalSpeechEnabled()) throw new Error("自然朗读尚未启用。" );
+async function requestAssessmentSpeech(text) {
+  if (!deviceAIConfig.apiKey) throw new Error("发音相似度需要先在设置中保存智谱 API Key。" );
   const content = String(text || "").trim().slice(0, 900);
   const response = await fetch(ZHIPU_TTS_URL, {
     method: "POST",
@@ -3131,6 +3472,11 @@ async function requestNaturalSpeech(text) {
   const blob = await response.blob();
   if (!blob.size) throw new Error("智谱没有返回有效音频。" );
   return blob.type === "audio/wav" ? blob : new Blob([blob], { type: "audio/wav" });
+}
+
+async function requestNaturalSpeech(text) {
+  if (!naturalSpeechEnabled()) throw new Error("自然朗读尚未启用。" );
+  return requestAssessmentSpeech(text);
 }
 
 function speakTextWithSystem(text, messageIndex) {
@@ -3858,6 +4204,7 @@ function bindEvents() {
       stopAITextSpeech();
     }
     if (currentView === "today" && button.dataset.viewTarget !== "today") stopPronunciationAudio();
+    if (currentView === "today" && button.dataset.viewTarget !== "today") stopWordPronunciationAssessment(true, false);
     currentView = button.dataset.viewTarget;
     renderNavigation();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -3883,6 +4230,7 @@ function bindEvents() {
     stabilizeStudyWorkspace();
   });
   $("#speakWord").addEventListener("click", () => { void speak(currentWord?.word, { notifyFallback: true }); });
+  $("#assessWordPronunciation").addEventListener("click", toggleWordPronunciationAssessment);
   const nativePronunciation = $("#wordPronunciationPlayer");
   nativePronunciation.addEventListener("play", () => {
     if ("speechSynthesis" in window) speechSynthesis.cancel();
@@ -4027,7 +4375,7 @@ function bindEvents() {
       rateCurrentWord({ "1": "unknown", "2": "fuzzy", "3": "known" }[event.key]);
     }
   });
-  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopAITextSpeech(false); stopTextDictation(true); stopShadowing(true, false); stopVoiceImmediately(false); persistState(); });
+  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopWordPronunciationAssessment(true, false); stopAITextSpeech(false); stopTextDictation(true); stopShadowing(true, false); stopVoiceImmediately(false); persistState(); });
   window.addEventListener("online", () => scheduleCloudSync(100));
   window.addEventListener("offline", () => setSyncStatus("offline", "当前离线，记录已安全保存在本机"));
   document.addEventListener("visibilitychange", () => {
@@ -4133,7 +4481,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=38", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=39", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
