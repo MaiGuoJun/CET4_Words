@@ -179,6 +179,7 @@ let currentWord = null;
 let studyQueue = [];
 let screeningSessionOffset = 0;
 let stableStudyHeight = 0;
+let libraryStudySnapshot = null;
 let activeWordTool = "similar";
 let wordLookup = new Map();
 let wordFamilyIndex = new Map();
@@ -201,7 +202,6 @@ let pronunciationRequestId = 0;
 let pronunciationAudioContext = null;
 let pronunciationAudioSource = null;
 let activeWordLibrarySpeakButton = null;
-let cloudSpeechCapabilities = { checkedAt: 0, azureSpeech: false, pending: null };
 let aiPending = false;
 let aiServiceStatus = "checking";
 let aiServiceInfo = null;
@@ -749,8 +749,9 @@ function renderNavigation() {
     view.hidden = !active;
     view.classList.toggle("active", active);
   });
+  const navigationView = studyMode === "library" ? "words" : currentView;
   $$("[data-view-target]").forEach((button) => {
-    const active = button.dataset.viewTarget === currentView;
+    const active = button.dataset.viewTarget === navigationView;
     button.classList.toggle("active", active);
     if (button.classList.contains("nav-item")) active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
   });
@@ -1082,6 +1083,7 @@ function startMissionFromState() {
 }
 
 function openStudy(mode) {
+  if (studyMode === "library") restoreLibraryStudySession();
   stopAITextSpeech();
   studyMode = mode;
   $("#studyPanel").hidden = false;
@@ -1405,21 +1407,25 @@ function renderCurrentWord() {
   renderWordMeanings(currentWord);
   $("#wordRank").textContent = `词频 #${currentWord.rank || currentWord.frequency || "—"}`;
   $("#wordStatus").textContent = item ? ({ known: "认识", fuzzy: "模糊", unknown: "不认识" }[item.status] || "待复习") : "未分类";
-  if (studyMode === "screen") {
+  const libraryDetail = studyMode === "library";
+  if (libraryDetail) {
+    $("#studyPosition").textContent = "单词详情";
+  } else if (studyMode === "screen") {
     const total = Math.min(500, screeningSessionOffset + studyQueue.length);
     $("#studyPosition").textContent = `${screeningSessionOffset + currentWordIndex + 1} / ${total}`;
   } else {
     $("#studyPosition").textContent = `${currentWordIndex + 1} / ${studyQueue.length}`;
   }
-  $("#wordReveal").hidden = true;
+  $("#wordReveal").hidden = !libraryDetail;
   $("#ratingActions").hidden = true;
   $("#quizOptions").hidden = true;
-  $("#revealWord").hidden = false;
+  $("#revealWord").hidden = libraryDetail;
   $("#revealWord").textContent = "显示释义";
   renderWordPhrases(currentWord);
   renderWordInsights(currentWord);
   void prepareCurrentPronunciation(currentWord.word);
   renderWordPronunciationAssessment();
+  if (libraryDetail) stabilizeStudyWorkspace();
   replayMotion($("#wordWorkspace"), "word-enter");
 }
 
@@ -1720,7 +1726,7 @@ async function fetchCloudPronunciation(word) {
         sourceUrl: normalizePronunciationUrl(response.headers.get("X-Pronunciation-Source")),
         licenseName: response.headers.get("X-Pronunciation-License") || "",
         accent: response.headers.get("X-Pronunciation-Accent") || state.settings.accent || "en-US",
-        generated: kind === "azure-tts"
+        generated: kind !== "human"
       };
     } catch {
       return null;
@@ -2046,7 +2052,7 @@ function renderPronunciationSource(clip) {
   container.removeAttribute("aria-hidden");
   const label = document.createElement("span");
   const accent = clip.accent === "en-US" ? "美音" : clip.accent === "en-GB" ? "英音" : "";
-  const generatedName = clip.generatedProvider === "zhipu" ? "智谱自然语音" : "Azure 自然语音";
+  const generatedName = clip.generatedProvider === "zhipu" ? "智谱自然语音" : "自然语音";
   label.textContent = clip.fallback ? "设备备用发音" : clip.generated ? `${generatedName}${accent ? ` · ${accent}` : ""}` : `真人录音${accent ? ` · ${accent}` : ""}`;
   container.append(label);
   if (!clip.fallback && !clip.generated && clip.sourceUrl) {
@@ -3216,41 +3222,6 @@ async function requestCloudTranscription(wavBlob) {
   return text;
 }
 
-async function azureSpeechAvailable() {
-  if (!canUseCloudSpeech()) return false;
-  const now = Date.now();
-  if (now - cloudSpeechCapabilities.checkedAt < 5 * 60 * 1000) return cloudSpeechCapabilities.azureSpeech;
-  if (cloudSpeechCapabilities.pending) return cloudSpeechCapabilities.pending;
-  cloudSpeechCapabilities.pending = fetch(`${syncConfig.endpoint}/health`, { cache: "no-store" })
-    .then((response) => response.ok ? response.json() : null)
-    .then((data) => {
-      cloudSpeechCapabilities = { checkedAt: Date.now(), azureSpeech: data?.azureSpeech === true, pending: null };
-      return cloudSpeechCapabilities.azureSpeech;
-    })
-    .catch(() => {
-      cloudSpeechCapabilities = { checkedAt: Date.now(), azureSpeech: false, pending: null };
-      return false;
-    });
-  return cloudSpeechCapabilities.pending;
-}
-
-async function requestAzurePronunciationAssessment(wavBlob, word) {
-  if (!canUseCloudSpeech()) throw new Error("请先连接 Cloudflare，Azure 密钥需要由它安全保管。" );
-  if (!await azureSpeechAvailable()) throw new Error("Azure 发音评测未启用，已改用智谱与本地评分。" );
-  const params = new URLSearchParams({ reference: word, language: state.settings.accent || "en-US" });
-  const response = await fetch(`${syncConfig.endpoint}/pronunciation-assessment?${params}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${syncConfig.token}`,
-      "Content-Type": "audio/wav"
-    },
-    body: wavBlob
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Azure 发音评测失败（${response.status}）。`);
-  return data;
-}
-
 function renderPhonemeAssessment(phonemes = []) {
   if (!Array.isArray(phonemes) || !phonemes.length) return "";
   const chips = phonemes.map((item) => {
@@ -3287,18 +3258,17 @@ function renderWordPronunciationAssessment() {
     panel.innerHTML = `<p class="pronunciation-error">${escapeHtml(stateValue.error)}</p>`;
     return;
   }
-  const azure = stateValue.provider === "azure";
   panel.innerHTML = `<div class="pronunciation-score-grid">
     <div class="primary"><strong>${Number(stateValue.score) || 0}</strong><span>综合分</span></div>
-    <div><strong>${Number.isFinite(stateValue.soundScore) ? stateValue.soundScore : "—"}</strong><span>${azure ? "音素准确度" : "声音相似度"}</span></div>
-    <div><strong>${Number.isFinite(stateValue.rhythmScore) ? stateValue.rhythmScore : "—"}</strong><span>${azure ? "流利度" : "时长与节奏"}</span></div>
-    <div><strong>${Number.isFinite(stateValue.textScore) ? stateValue.textScore : "—"}</strong><span>${azure ? "完整度" : "读音识别"}</span></div>
+    <div><strong>${Number.isFinite(stateValue.soundScore) ? stateValue.soundScore : "—"}</strong><span>声音相似度</span></div>
+    <div><strong>${Number.isFinite(stateValue.rhythmScore) ? stateValue.rhythmScore : "—"}</strong><span>时长与节奏</span></div>
+    <div><strong>${Number.isFinite(stateValue.textScore) ? stateValue.textScore : "—"}</strong><span>读音识别</span></div>
   </div>
   <p><b>目标音标</b>${currentWord?.phonetic ? `/${escapeHtml(currentWord.phonetic.replace(/^\/?|\/?$/g, ""))}/` : "词库暂无音标"}</p>
   ${stateValue.recognized ? `<p><b>识别到</b>${escapeHtml(stateValue.recognized)}</p>` : ""}
   ${renderPhonemeAssessment(stateValue.phonemes)}
   <p><b>建议</b>${escapeHtml(pronunciationAdvice(stateValue))}</p>
-  <small>${azure ? "本次由 Azure Speech 按目标单词进行专业逐音素评测；录音会临时上传至 Azure。" : stateValue.provider === "asr" ? "本次没有可用标准录音，仅按语音识别结果给出基础分；连接 Azure 后可获得逐音素评分。" : "本次在设备上比较标准录音与频谱、时长及能量节奏；连接 Azure 后可获得逐音素评分。"}</small>`;
+  <small>${stateValue.provider === "asr" ? "本次没有可用标准录音，仅按智谱语音识别结果给出基础分。" : "本次在设备上比较标准录音与你的频谱、时长及能量节奏。"}</small>`;
 }
 
 function stopWordPronunciationAssessment(abort = false, shouldRender = true) {
@@ -3327,41 +3297,22 @@ async function finishWordPronunciationAssessment(recorder, chunks, word, aborted
   try {
     const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
     const wav = await convertRecordingToWav(recorded);
-    let azureError = null;
-    const azureResult = await requestAzurePronunciationAssessment(wav, word).catch((error) => {
-      azureError = error;
-      return null;
-    });
-    let result;
-    if (azureResult) {
-      result = {
-        textScore: Number.isFinite(azureResult.completenessScore) ? azureResult.completenessScore : null,
-        soundScore: Number.isFinite(azureResult.accuracyScore) ? azureResult.accuracyScore : null,
-        rhythmScore: Number.isFinite(azureResult.fluencyScore) ? azureResult.fluencyScore : null,
-        score: Number(azureResult.score) || combinedPronunciationScore({ textScore: azureResult.completenessScore, soundScore: azureResult.accuracyScore, rhythmScore: azureResult.fluencyScore }),
-        recognized: azureResult.recognized || "",
-        phonemes: Array.isArray(azureResult.phonemes) ? azureResult.phonemes : [],
-        errorType: azureResult.errorType || "",
-        provider: "azure"
-      };
-    } else {
-      const [referenceResult, transcription] = await Promise.all([
-        getWordPronunciationBlob(word).then((reference) => comparePronunciationAudio(wav, reference)).catch(() => null),
-        deviceAIConfig.apiKey ? requestCloudTranscription(wav).catch(() => "") : Promise.resolve("")
-      ]);
-      const textScore = transcription ? scoreTextMatch(word, transcription).score : null;
-      if (!referenceResult && !transcription) throw azureError || new Error("这个词没有可用标准录音；请配置 Azure 后再试。" );
-      result = {
-        textScore,
-        soundScore: referenceResult?.soundScore ?? null,
-        rhythmScore: referenceResult?.rhythmScore ?? null,
-        score: combinedPronunciationScore({ textScore, soundScore: referenceResult?.soundScore, rhythmScore: referenceResult?.rhythmScore }),
-        recognized: transcription,
-        phonemes: [],
-        errorType: "",
-        provider: referenceResult ? "local" : "asr"
-      };
-    }
+    const [referenceResult, transcription] = await Promise.all([
+      getWordPronunciationBlob(word).then((reference) => comparePronunciationAudio(wav, reference)).catch(() => null),
+      deviceAIConfig.apiKey ? requestCloudTranscription(wav).catch(() => "") : Promise.resolve("")
+    ]);
+    const textScore = transcription ? scoreTextMatch(word, transcription).score : null;
+    if (!referenceResult && !transcription) throw new Error("这个词暂时没有可用标准录音，请联网后再试。" );
+    const result = {
+      textScore,
+      soundScore: referenceResult?.soundScore ?? null,
+      rhythmScore: referenceResult?.rhythmScore ?? null,
+      score: combinedPronunciationScore({ textScore, soundScore: referenceResult?.soundScore, rhythmScore: referenceResult?.rhythmScore }),
+      recognized: transcription,
+      phonemes: [],
+      errorType: "",
+      provider: referenceResult ? "local" : "asr"
+    };
     Object.assign(wordPronunciationAssessment, result, { status: "complete", error: "" });
     state.pronunciationScores[word] = { ...result, assessedAt: new Date().toISOString() };
     const item = state.wordStates[word];
@@ -4507,6 +4458,70 @@ function shortLearningDate(value) {
   return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(date);
 }
 
+function setLibraryDetailChrome(active) {
+  const panel = $("#studyPanel");
+  const back = $("#closeLibraryDetail");
+  const tabs = panel?.querySelector(".mode-tabs");
+  if (back) back.hidden = !active;
+  if (tabs) tabs.hidden = active;
+  panel?.classList.toggle("library-detail", active);
+}
+
+function restoreLibraryStudySession() {
+  if (!libraryStudySnapshot) {
+    setLibraryDetailChrome(false);
+    return;
+  }
+  stopWordPronunciationAssessment(true, false);
+  stopPronunciationAudio();
+  const snapshot = libraryStudySnapshot;
+  libraryStudySnapshot = null;
+  studyMode = snapshot.studyMode;
+  studyQueue = snapshot.studyQueue;
+  currentWordIndex = snapshot.currentWordIndex;
+  currentWord = snapshot.currentWord;
+  screeningSessionOffset = snapshot.screeningSessionOffset;
+  stableStudyHeight = snapshot.stableStudyHeight;
+  setLibraryDetailChrome(false);
+  $("#studyPanel").hidden = snapshot.panelHidden;
+  if (!snapshot.panelHidden && studyQueue.length) renderCurrentWord();
+}
+
+function openLibraryWordDetail(name) {
+  const word = wordLookup.get(normalizedWordName(name));
+  if (!word) return;
+  if (!libraryStudySnapshot) {
+    libraryStudySnapshot = {
+      studyMode,
+      studyQueue: [...studyQueue],
+      currentWordIndex,
+      currentWord,
+      screeningSessionOffset,
+      stableStudyHeight,
+      panelHidden: $("#studyPanel").hidden
+    };
+  }
+  studyMode = "library";
+  studyQueue = [word];
+  currentWordIndex = 0;
+  screeningSessionOffset = 0;
+  stableStudyHeight = 0;
+  $("#wordWorkspace").style.removeProperty("min-height");
+  $("#studyPanel").hidden = false;
+  setLibraryDetailChrome(true);
+  currentView = "today";
+  renderNavigation();
+  renderCurrentWord();
+  $("#studyPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function closeLibraryWordDetail() {
+  restoreLibraryStudySession();
+  currentView = "words";
+  renderNavigation();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 function renderWordLibrary() {
   const list = $("#wordLibraryList");
   if (!list) return;
@@ -4548,7 +4563,7 @@ function renderWordLibrary() {
     const learningMeta = item?.learnedAt ? `已背过${reviewed ? ` · 最近 ${reviewed}` : ""}` : item?.status ? "词测已判断" : "尚未开始";
     return `<article class="word-library-row">
       <span class="word-library-number">${number.format(start + offset + 1)}</span>
-      <div class="word-library-word"><strong>${escapeHtml(word.word)}</strong>${word.phonetic ? `<span>/${escapeHtml(String(word.phonetic).replace(/^\/?|\/?$/g, ""))}/</span>` : ""}</div>
+      <button class="word-library-word" type="button" data-word-list-open="${escapeHtml(word.word)}" aria-label="查看 ${escapeHtml(word.word)} 的详情与跟读纠音"><strong>${escapeHtml(word.word)}</strong>${word.phonetic ? `<span>/${escapeHtml(String(word.phonetic).replace(/^\/?|\/?$/g, ""))}/</span>` : ""}</button>
       <p class="word-library-meaning">${escapeHtml(meaning || word.translation || "暂无释义")}</p>
       <div class="word-library-meta"><span class="word-level-chip ${isCET6 ? "cet6" : ""}">${isCET6 ? "六级补充" : "四级"}</span><span class="word-status-chip ${status}">${statusLabels[status]}</span><small>${escapeHtml(learningMeta)}</small></div>
       <button class="word-library-speak" type="button" data-word-list-speak="${escapeHtml(word.word)}" aria-label="朗读 ${escapeHtml(word.word)}"><span class="word-library-speak-glyph" aria-hidden="true">▶</span></button>
@@ -4751,6 +4766,7 @@ function bindEvents() {
     }
     if (currentView === "today" && button.dataset.viewTarget !== "today") stopPronunciationAudio();
     if (currentView === "today" && button.dataset.viewTarget !== "today") stopWordPronunciationAssessment(true, false);
+    if (studyMode === "library") restoreLibraryStudySession();
     currentView = button.dataset.viewTarget;
     renderNavigation();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -4908,8 +4924,11 @@ function bindEvents() {
   });
   $("#wordLibraryList").addEventListener("click", (event) => {
     const button = event.target.closest("[data-word-list-speak]");
-    if (button) void speak(button.dataset.wordListSpeak, { notifyFallback: true, triggerButton: button });
+    if (button) return void speak(button.dataset.wordListSpeak, { notifyFallback: true, triggerButton: button });
+    const detailButton = event.target.closest("[data-word-list-open]");
+    if (detailButton) openLibraryWordDetail(detailButton.dataset.wordListOpen);
   });
+  $("#closeLibraryDetail").addEventListener("click", closeLibraryWordDetail);
   $("#wordLibraryPrev").addEventListener("click", () => moveWordLibraryPage(-1));
   $("#wordLibraryNext").addEventListener("click", () => moveWordLibraryPage(1));
 
@@ -5054,7 +5073,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=48", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=50", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

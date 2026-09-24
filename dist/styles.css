@@ -231,6 +231,8 @@ h2 { margin-bottom: 0; font-size: 1.25rem; letter-spacing: -0.02em; }
 .word-library-list { display: grid; border-top: 1px solid var(--line); }
 .word-library-row { display: grid; grid-template-columns: 42px minmax(140px, 0.72fr) minmax(240px, 1.5fr) minmax(210px, 0.82fr) 38px; align-items: center; gap: 14px; min-height: 76px; padding: 10px 4px; border-bottom: 1px solid var(--line); }
 .word-library-number { color: var(--muted); font-size: 0.68rem; text-align: right; }
+.word-library-word { min-width: 0; padding: 7px 9px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--text); text-align: left; cursor: pointer; transition: color 160ms ease, border-color 160ms ease, background 160ms ease; }
+.word-library-word:hover, .word-library-word:focus-visible { border-color: var(--line-strong); background: var(--accent-soft); color: var(--accent); outline: none; }
 .word-library-word strong { display: block; font-size: 1.08rem; letter-spacing: 0.01em; }
 .word-library-word > span { display: block; margin-top: 4px; color: var(--accent); font-size: 0.7rem; font-weight: 600; }
 .word-library-meaning { margin: 0; color: var(--text); font-size: 0.8rem; line-height: 1.55; }
@@ -271,6 +273,8 @@ h2 { margin-bottom: 0; font-size: 1.25rem; letter-spacing: -0.02em; }
 
 .study-panel { margin-top: 18px; }
 .study-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+.library-detail-back { margin-right: auto; }
+.study-panel.library-detail .study-position { color: var(--accent); }
 .mode-tabs, .speed-group, .loop-group { display: flex; flex-wrap: wrap; gap: 5px; }
 .mode-tabs button, .speed-group button, .loop-group button { min-height: 36px; padding: 0 12px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--muted); cursor: pointer; transition: transform 180ms var(--ease-out), color 180ms ease, background 180ms ease, border-color 180ms ease; }
 .mode-tabs button.active, .speed-group button.active { border-color: var(--line-strong); color: var(--text); background: var(--accent-soft); }

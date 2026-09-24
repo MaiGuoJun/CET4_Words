@@ -34,7 +34,9 @@ requireText(server, 'body.task === "writing"', "server writing review route");
 requireText(app, "comparePronunciationAudio", "acoustic pronunciation comparison");
 requireText(app, "scoreStandaloneRhythm", "no-TTS shadowing rhythm fallback");
 requireText(app, "基础跟读分", "basic shadowing score label");
-requireText(app, "requestAzurePronunciationAssessment", "Azure phoneme pronunciation assessment");
+requireText(app, "openLibraryWordDetail", "word library detail entry");
+requireText(app, "data-word-list-open", "clickable word library rows");
+requireText(html, 'id="closeLibraryDetail"', "word detail return control");
 requireText(app, "fetchZhipuWordPronunciation", "Zhipu word pronunciation fallback");
 requireText(app, "renderPhonemeAssessment", "phoneme score rendering");
 requireText(app, "/word-audio", "Cloudflare pronunciation audio proxy");
@@ -47,6 +49,6 @@ requireText(html, 'class="word-pronunciation-practice"', "fixed word pronunciati
 requireText(app, "settleWithin(getPronunciationClip(text), 7000, null)", "mobile pronunciation timeout fallback");
 requireText(app, "中文提示：${primaryTestMeaning(currentWord)}", "audio quiz Chinese meaning hint");
 requireText(app, "const canTranslate = Boolean(latest?.translation)", "always-available voice translation control");
-requireText(html, "app.js?v=48", "v48 script cache bust");
+requireText(html, "app.js?v=50", "v50 script cache bust");
 
 console.log("AI contract smoke test passed");
