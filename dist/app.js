@@ -200,6 +200,7 @@ let pronunciationAudio = null;
 let pronunciationRequestId = 0;
 let pronunciationAudioContext = null;
 let pronunciationAudioSource = null;
+let activeWordLibrarySpeakButton = null;
 let cloudSpeechCapabilities = { checkedAt: 0, azureSpeech: false, pending: null };
 let aiPending = false;
 let aiServiceStatus = "checking";
@@ -2064,7 +2065,28 @@ function renderPronunciationSource(clip) {
   container.hidden = false;
 }
 
-function speakWithSystemVoice(text) {
+function setWordLibrarySpeakButton(button, status, text = button?.dataset.wordListSpeak) {
+  if (!button?.isConnected) return;
+  const loading = status === "loading";
+  const playing = status === "playing";
+  button.classList.toggle("loading", loading);
+  button.classList.toggle("playing", playing);
+  button.disabled = loading;
+  button.setAttribute("aria-busy", loading ? "true" : "false");
+  button.setAttribute("aria-label", `${loading ? "正在获取发音" : playing ? "正在播放" : "朗读"} ${text || "单词"}`);
+  button.innerHTML = loading
+    ? '<span class="word-library-spinner" aria-hidden="true"></span>'
+    : playing
+      ? '<span class="word-library-wave" aria-hidden="true"><i></i><i></i><i></i></span>'
+      : '<span class="word-library-speak-glyph" aria-hidden="true">▶</span>';
+}
+
+function resetActiveWordLibrarySpeakButton() {
+  if (activeWordLibrarySpeakButton) setWordLibrarySpeakButton(activeWordLibrarySpeakButton, "idle");
+  activeWordLibrarySpeakButton = null;
+}
+
+function speakWithSystemVoice(text, { onStart, onEnd } = {}) {
   if (!("speechSynthesis" in window) || !text) return false;
   speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
@@ -2073,12 +2095,26 @@ function speakWithSystemVoice(text) {
   if (selected) utterance.voice = selected;
   utterance.rate = 0.82;
   utterance.pitch = 0.96;
+  utterance.onstart = () => onStart?.();
+  utterance.onend = () => onEnd?.();
+  utterance.onerror = () => onEnd?.();
   speechSynthesis.speak(utterance);
   return true;
 }
 
-async function speak(text, { notifyFallback = false } = {}) {
+async function speak(text, { notifyFallback = false, triggerButton = null } = {}) {
   if (!text) return;
+  resetActiveWordLibrarySpeakButton();
+  const libraryButton = triggerButton?.matches?.("[data-word-list-speak]") ? triggerButton : null;
+  if (libraryButton) {
+    activeWordLibrarySpeakButton = libraryButton;
+    setWordLibrarySpeakButton(libraryButton, "loading", text);
+  }
+  const setLibraryStatus = (status) => {
+    if (!libraryButton || activeWordLibrarySpeakButton !== libraryButton) return;
+    setWordLibrarySpeakButton(libraryButton, status, text);
+    if (status === "idle") activeWordLibrarySpeakButton = null;
+  };
   stopPronunciationAudio(false);
   const requestId = ++pronunciationRequestId;
   const prepared = preparedPronunciationAsset(text);
@@ -2093,7 +2129,11 @@ async function speak(text, { notifyFallback = false } = {}) {
       if (pronunciationAudio === audio) pronunciationAudio = null;
       renderPronunciationSource({ fallback: true });
       setPronunciationButton("idle", text);
-      const spoke = speakWithSystemVoice(text);
+      const spoke = speakWithSystemVoice(text, {
+        onStart: () => setLibraryStatus("playing"),
+        onEnd: () => setLibraryStatus("idle")
+      });
+      if (!spoke) setLibraryStatus("idle");
       if (notifyFallback) {
         const detail = reason?.name === "NotAllowedError"
           ? "浏览器阻止了音频播放，请在地址栏允许声音后重试。"
@@ -2103,12 +2143,16 @@ async function speak(text, { notifyFallback = false } = {}) {
     };
     audio.onended = () => {
       if (pronunciationAudio === audio) pronunciationAudio = null;
-      if (requestId === pronunciationRequestId) setPronunciationButton("idle", text);
+      if (requestId === pronunciationRequestId) {
+        setPronunciationButton("idle", text);
+        setLibraryStatus("idle");
+      }
     };
     audio.onerror = () => fallback(audio.error);
     const playback = audio.play();
     renderPronunciationSource(clip);
     setPronunciationButton("playing", text);
+    setLibraryStatus("playing");
     try {
       await playback;
     } catch (error) {
@@ -2138,11 +2182,15 @@ async function speak(text, { notifyFallback = false } = {}) {
       source.addEventListener("ended", () => {
         if (pronunciationAudioSource === source) pronunciationAudioSource = null;
         try { source.disconnect(); } catch {}
-        if (requestId === pronunciationRequestId) setPronunciationButton("idle", text);
+        if (requestId === pronunciationRequestId) {
+          setPronunciationButton("idle", text);
+          setLibraryStatus("idle");
+        }
       }, { once: true });
       source.start();
       renderPronunciationSource(clip);
       setPronunciationButton("playing", text);
+      setLibraryStatus("playing");
       return;
     } catch {
       if (requestId !== pronunciationRequestId) return;
@@ -2155,13 +2203,17 @@ async function speak(text, { notifyFallback = false } = {}) {
     audio.preload = "auto";
     audio.addEventListener("ended", () => {
       if (pronunciationAudio === audio) pronunciationAudio = null;
-      if (requestId === pronunciationRequestId) setPronunciationButton("idle", text);
+      if (requestId === pronunciationRequestId) {
+        setPronunciationButton("idle", text);
+        setLibraryStatus("idle");
+      }
     }, { once: true });
     try {
       await audio.play();
       if (requestId !== pronunciationRequestId) return;
       renderPronunciationSource(clip);
       setPronunciationButton("playing", text);
+      setLibraryStatus("playing");
       return;
     } catch {
       if (pronunciationAudio === audio) pronunciationAudio = null;
@@ -2170,7 +2222,11 @@ async function speak(text, { notifyFallback = false } = {}) {
 
   renderPronunciationSource({ fallback: true });
   setPronunciationButton("idle", text);
-  const spoke = speakWithSystemVoice(text);
+  const spoke = speakWithSystemVoice(text, {
+    onStart: () => setLibraryStatus("playing"),
+    onEnd: () => setLibraryStatus("idle")
+  });
+  if (!spoke) setLibraryStatus("idle");
   if (notifyFallback) toast(spoke ? "真人录音暂时无法播放" : "当前无法播放发音", spoke ? "已改用设备备用发音，请稍后再试。" : "请联网或更换支持发音的浏览器后重试。");
 }
 
@@ -4495,7 +4551,7 @@ function renderWordLibrary() {
       <div class="word-library-word"><strong>${escapeHtml(word.word)}</strong>${word.phonetic ? `<span>/${escapeHtml(String(word.phonetic).replace(/^\/?|\/?$/g, ""))}/</span>` : ""}</div>
       <p class="word-library-meaning">${escapeHtml(meaning || word.translation || "暂无释义")}</p>
       <div class="word-library-meta"><span class="word-level-chip ${isCET6 ? "cet6" : ""}">${isCET6 ? "六级补充" : "四级"}</span><span class="word-status-chip ${status}">${statusLabels[status]}</span><small>${escapeHtml(learningMeta)}</small></div>
-      <button class="word-library-speak" type="button" data-word-list-speak="${escapeHtml(word.word)}" aria-label="朗读 ${escapeHtml(word.word)}">▶</button>
+      <button class="word-library-speak" type="button" data-word-list-speak="${escapeHtml(word.word)}" aria-label="朗读 ${escapeHtml(word.word)}"><span class="word-library-speak-glyph" aria-hidden="true">▶</span></button>
     </article>`;
   }).join("") : `<div class="word-library-empty"><strong>没有找到符合条件的单词</strong><p>换个关键词，或选择“全部”再试试。</p></div>`;
 }
@@ -4852,7 +4908,7 @@ function bindEvents() {
   });
   $("#wordLibraryList").addEventListener("click", (event) => {
     const button = event.target.closest("[data-word-list-speak]");
-    if (button) void speak(button.dataset.wordListSpeak, { notifyFallback: true });
+    if (button) void speak(button.dataset.wordListSpeak, { notifyFallback: true, triggerButton: button });
   });
   $("#wordLibraryPrev").addEventListener("click", () => moveWordLibraryPage(-1));
   $("#wordLibraryNext").addEventListener("click", () => moveWordLibraryPage(1));
@@ -4998,7 +5054,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=47", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=48", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
