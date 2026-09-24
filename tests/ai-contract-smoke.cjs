@@ -40,6 +40,7 @@ requireText(html, 'id="closeLibraryDetail"', "word detail return control");
 requireText(html, 'id="closeAudioImport"', "audio import close control");
 requireText(html, 'id="cancelAudioImport"', "audio import cancel control");
 requireText(app, "closeAudioImportDialog", "audio import dismiss handler");
+requireText(html, 'id="closeAudioImport" value="cancel" formnovalidate', "native audio import close fallback");
 requireText(app, "fetchZhipuWordPronunciation", "Zhipu word pronunciation fallback");
 requireText(app, "renderPhonemeAssessment", "phoneme score rendering");
 requireText(app, "/word-audio", "Cloudflare pronunciation audio proxy");
@@ -52,6 +53,6 @@ requireText(html, 'class="word-pronunciation-practice"', "fixed word pronunciati
 requireText(app, "settleWithin(getPronunciationClip(text), 7000, null)", "mobile pronunciation timeout fallback");
 requireText(app, "中文提示：${primaryTestMeaning(currentWord)}", "audio quiz Chinese meaning hint");
 requireText(app, "const canTranslate = Boolean(latest?.translation)", "always-available voice translation control");
-requireText(html, "app.js?v=51", "v51 script cache bust");
+requireText(html, "app.js?v=52", "v52 script cache bust");
 
 console.log("AI contract smoke test passed");

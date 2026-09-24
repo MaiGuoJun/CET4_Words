@@ -13,6 +13,8 @@ if (new Set(words.map((word) => word.word.toLowerCase())).size !== words.length)
 
 requireText(html, 'data-view-target="words"', "word-library navigation");
 requireText(html, 'id="wordLibrarySearch"', "word search");
+requireText(html, 'id="wordLibraryPageJump"', "page jump form");
+requireText(html, 'id="wordLibraryPageInput" type="number"', "numeric page input");
 requireText(html, 'data-word-filter="learned"', "learned filter");
 requireText(html, 'data-word-filter="unlearned"', "unlearned filter");
 requireText(html, 'data-word-filter="known"', "known filter");
@@ -20,6 +22,7 @@ requireText(html, 'data-word-filter="fuzzy"', "fuzzy filter");
 requireText(html, 'data-word-filter="unknown"', "unknown filter");
 requireText(app, "function wordLibraryFilteredWords()", "word filtering engine");
 requireText(app, "pageSize: 80", "mobile-safe pagination");
+requireText(app, "function jumpWordLibraryPage()", "page jump behavior");
 requireText(app, "word.phraseMeaning", "phrase/meaning search corpus");
 requireText(app, "data-word-list-speak", "word-list pronunciation control");
 

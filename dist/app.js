@@ -4556,6 +4556,8 @@ function renderWordLibrary() {
   const pageWords = filtered.slice(start, start + wordLibraryState.pageSize);
   $("#wordLibraryResultCount").textContent = `找到 ${number.format(filtered.length)} 个词${filtered.length ? ` · 显示 ${number.format(start + 1)}–${number.format(Math.min(start + wordLibraryState.pageSize, filtered.length))}` : ""}`;
   $("#wordLibraryPage").textContent = `第 ${wordLibraryState.page} / ${totalPages} 页`;
+  $("#wordLibraryPageInput").value = wordLibraryState.page;
+  $("#wordLibraryPageInput").max = totalPages;
   $("#wordLibraryPrev").disabled = wordLibraryState.page <= 1;
   $("#wordLibraryNext").disabled = wordLibraryState.page >= totalPages;
 
@@ -4587,6 +4589,15 @@ function setWordLibraryFilter(status) {
 
 function moveWordLibraryPage(amount) {
   wordLibraryState.page += amount;
+  renderWordLibrary();
+  $(".word-library-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function jumpWordLibraryPage() {
+  const input = $("#wordLibraryPageInput");
+  const requestedPage = Math.trunc(Number(input.value));
+  const totalPages = Math.max(1, Math.ceil(wordLibraryFilteredWords().length / wordLibraryState.pageSize));
+  wordLibraryState.page = Number.isFinite(requestedPage) ? Math.min(Math.max(1, requestedPage), totalPages) : wordLibraryState.page;
   renderWordLibrary();
   $(".word-library-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -4875,8 +4886,14 @@ function bindEvents() {
   });
   $("#completeListening").addEventListener("click", completeListening);
   $("#openImportAudio").addEventListener("click", () => $("#audioImportDialog").showModal());
-  $("#closeAudioImport").addEventListener("click", closeAudioImportDialog);
-  $("#cancelAudioImport").addEventListener("click", closeAudioImportDialog);
+  $("#closeAudioImport").addEventListener("click", (event) => {
+    event.preventDefault();
+    closeAudioImportDialog();
+  });
+  $("#cancelAudioImport").addEventListener("click", (event) => {
+    event.preventDefault();
+    closeAudioImportDialog();
+  });
   $("#audioImportDialog").addEventListener("cancel", (event) => {
     event.preventDefault();
     closeAudioImportDialog();
@@ -4947,6 +4964,10 @@ function bindEvents() {
   $("#closeLibraryDetail").addEventListener("click", closeLibraryWordDetail);
   $("#wordLibraryPrev").addEventListener("click", () => moveWordLibraryPage(-1));
   $("#wordLibraryNext").addEventListener("click", () => moveWordLibraryPage(1));
+  $("#wordLibraryPageJump").addEventListener("submit", (event) => {
+    event.preventDefault();
+    jumpWordLibraryPage();
+  });
 
   $("#dailyTargetInput").addEventListener("input", (event) => {
     $("#settingsTargetOutput").textContent = event.target.value;
@@ -5089,7 +5110,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=51", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=52", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

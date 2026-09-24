@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=51" />
+    <link rel="stylesheet" href="./styles.css?v=52" />
   </head>
   <body>
     <div class="app-shell">
@@ -220,6 +220,12 @@
             <div class="word-library-pagination">
               <button class="button ghost small" type="button" id="wordLibraryPrev">上一页</button>
               <span id="wordLibraryPage">第 1 / 1 页</span>
+              <form class="word-library-page-jump" id="wordLibraryPageJump" aria-label="跳转到指定页">
+                <label for="wordLibraryPageInput">跳至</label>
+                <input id="wordLibraryPageInput" type="number" inputmode="numeric" min="1" value="1" aria-label="页码"/>
+                <span>页</span>
+                <button class="button ghost small" type="submit">跳转</button>
+              </form>
               <button class="button ghost small" type="button" id="wordLibraryNext">下一页</button>
             </div>
           </article>
@@ -464,12 +470,12 @@
 
     <dialog id="audioImportDialog">
       <form method="dialog" class="dialog-card" id="audioImportForm">
-        <div class="dialog-head"><div><p class="card-kicker">LOCAL MATERIAL</p><h2>导入本地听力</h2></div><button class="icon-button" type="button" id="closeAudioImport" aria-label="关闭导入弹窗">×</button></div>
+        <div class="dialog-head"><div><p class="card-kicker">LOCAL MATERIAL</p><h2>导入本地听力</h2></div><button class="icon-button" type="submit" id="closeAudioImport" value="cancel" formnovalidate aria-label="关闭导入弹窗">×</button></div>
         <label class="field"><span>材料标题</span><input id="importTrackTitle" required maxlength="80" placeholder="例如：2025年12月四级长对话 1"/></label>
         <label class="field"><span>材料类型</span><select id="importTrackType"><option value="exam">四级真题</option><option value="practice">日常练习</option></select></label>
         <label class="file-drop"><span>选择音频文件</span><small>支持浏览器可播放的 MP3、M4A、OGG 或 WAV</small><input id="importAudioFile" type="file" accept="audio/*" required/></label>
         <label class="field"><span>原文（可稍后补充）</span><textarea id="importTranscript" rows="8" placeholder="粘贴对应原文。材料只保存在当前设备。"></textarea></label>
-        <div class="dialog-actions"><button class="button ghost" type="button" id="cancelAudioImport">取消</button><button class="button primary" type="submit">保存到本机</button></div>
+        <div class="dialog-actions"><button class="button ghost" type="submit" id="cancelAudioImport" value="cancel" formnovalidate>取消</button><button class="button primary" type="submit">保存到本机</button></div>
       </form>
     </dialog>
 
@@ -500,6 +506,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=51" defer></script>
+    <script src="./app.js?v=52" defer></script>
   </body>
 </html>
