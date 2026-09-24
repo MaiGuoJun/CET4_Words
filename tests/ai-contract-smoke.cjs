@@ -43,6 +43,10 @@ requireText(app, 'if (mode === "review")', "review group queue");
 requireText(app, "soundScore", "acoustic score component");
 requireText(app, "rhythmScore", "rhythm score component");
 requireText(html, 'id="assessWordPronunciation"', "word pronunciation assessment control");
-requireText(html, "app.js?v=44", "v44 script cache bust");
+requireText(html, 'class="word-pronunciation-practice"', "fixed word pronunciation practice area");
+requireText(app, "settleWithin(getPronunciationClip(text), 7000, null)", "mobile pronunciation timeout fallback");
+requireText(app, "中文提示：${primaryTestMeaning(currentWord)}", "audio quiz Chinese meaning hint");
+requireText(app, "const canTranslate = Boolean(latest?.translation)", "always-available voice translation control");
+requireText(html, "app.js?v=45", "v45 script cache bust");
 
 console.log("AI contract smoke test passed");

@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=44" />
+    <link rel="stylesheet" href="./styles.css?v=45" />
   </head>
   <body>
     <div class="app-shell">
@@ -146,15 +146,18 @@
 
             <div class="word-workspace" id="wordWorkspace">
               <div class="word-meta"><span id="wordLevel" class="word-level">四级</span><span id="wordRank">词频 #—</span><span id="wordStatus">未分类</span></div>
-              <div class="pronunciation-control">
-                <button class="speak-button" type="button" id="speakWord" aria-label="播放真人单词发音">▶ 真人发音</button>
-                <audio class="pronunciation-player" id="wordPronunciationPlayer" controls controlslist="nodownload noplaybackrate" preload="auto" aria-label="真人单词发音" hidden></audio>
-                <button class="button secondary word-pronunciation-assess" type="button" id="assessWordPronunciation">◉ 跟读纠音</button>
-              </div>
               <h2 class="word" id="wordText">loading</h2>
               <p class="phonetic" id="wordPhonetic"></p>
-              <p class="pronunciation-source" id="pronunciationSource" aria-live="polite" hidden></p>
-              <div class="word-pronunciation-result" id="wordPronunciationResult" aria-live="polite" hidden></div>
+              <section class="word-pronunciation-practice" aria-label="单词发音练习">
+                <div class="word-pronunciation-heading"><strong>发音练习</strong><small>先听标准音，再跟读评分</small></div>
+                <div class="pronunciation-control">
+                  <button class="speak-button" type="button" id="speakWord" aria-label="播放单词发音">▶ 播放发音</button>
+                  <audio class="pronunciation-player" id="wordPronunciationPlayer" controls controlslist="nodownload noplaybackrate" preload="auto" aria-label="真人单词发音" hidden></audio>
+                  <button class="button secondary word-pronunciation-assess" type="button" id="assessWordPronunciation">◉ 跟读纠音</button>
+                </div>
+                <p class="pronunciation-source" id="pronunciationSource" aria-live="polite" hidden></p>
+                <div class="word-pronunciation-result" id="wordPronunciationResult" aria-live="polite" hidden></div>
+              </section>
               <div class="word-reveal" id="wordReveal" hidden>
                 <section class="meaning-section" aria-labelledby="meaningTitle">
                   <div class="meaning-heading"><span id="meaningTitle">四级考频义项</span><small>星越多，考试中越常见</small></div>
@@ -329,7 +332,7 @@
                 <div class="ai-voice-transcript" id="aiVoiceTranscript" aria-live="polite">
                   <span>实时文字提示</span>
                   <p>开始后，这里会显示识别到的话和 AI 的英文回复。</p>
-                  <button class="ai-translation-toggle" type="button" id="aiVoiceTranslationToggle" hidden>显示翻译</button>
+                  <button class="ai-translation-toggle" type="button" id="aiVoiceTranslationToggle" hidden>显示 AI 回答翻译</button>
                   <p class="ai-voice-translation" id="aiVoiceTranslation" hidden></p>
                 </div>
                 <div class="ai-voice-actions">
@@ -496,6 +499,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=44" defer></script>
+    <script src="./app.js?v=45" defer></script>
   </body>
 </html>

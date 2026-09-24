@@ -1560,6 +1560,7 @@ function renderQuizQuestion() {
     }));
   } else if (currentQuiz.type === "audio") {
     $("#wordText").textContent = "听发音，选单词";
+    $("#wordPhonetic").textContent = `中文提示：${primaryTestMeaning(currentWord)}`;
     options = shuffle([currentWord, ...otherWords]).map((word) => ({ value: word.word, label: word.word }));
     const quizWord = currentWord.word;
     window.setTimeout(() => {
@@ -1699,7 +1700,7 @@ async function fetchCloudPronunciation(word) {
   if (cloudPronunciationAssetCache.has(key)) return cloudPronunciationAssetCache.get(key);
   const request = (async () => {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 16000);
+    const timeout = window.setTimeout(() => controller.abort(), 6500);
     try {
       const params = new URLSearchParams({ word, accent: state.settings.accent || "en-US" });
       const response = await fetch(`${syncConfig.endpoint}/word-audio?${params}`, {
@@ -1828,6 +1829,28 @@ function firstAvailablePronunciation(requests) {
   });
 }
 
+function settleWithin(promise, timeoutMs, fallback = null) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timeout = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback);
+    }, timeoutMs);
+    Promise.resolve(promise).then((value) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve(value);
+    }).catch(() => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve(fallback);
+    });
+  });
+}
+
 async function getPronunciationClip(text) {
   const word = String(text || "").trim().toLowerCase();
   if (!word) return null;
@@ -1835,10 +1858,11 @@ async function getPronunciationClip(text) {
   if (pronunciationCache.has(key)) return pronunciationCache.get(key);
   const isLocalApp = ["127.0.0.1", "localhost"].includes(window.location.hostname);
   const request = (async () => {
-    const human = isLocalApp
-      ? await firstAvailablePronunciation([fetchLocalPronunciation(word), fetchCloudPronunciation(word)])
-      : await firstAvailablePronunciation([fetchCloudPronunciation(word), fetchDictionaryPronunciation(word), fetchWikimediaPronunciation(word)]);
-    return human || fetchZhipuWordPronunciation(word);
+    const humanRequest = isLocalApp
+      ? firstAvailablePronunciation([fetchLocalPronunciation(word), fetchCloudPronunciation(word)])
+      : firstAvailablePronunciation([fetchCloudPronunciation(word), fetchDictionaryPronunciation(word), fetchWikimediaPronunciation(word)]);
+    const human = await settleWithin(humanRequest, 7000, null);
+    return human || settleWithin(fetchZhipuWordPronunciation(word), 7000, null);
   })();
   pronunciationCache.set(key, request);
   const clip = await request;
@@ -1876,7 +1900,7 @@ async function getPronunciationAsset(text) {
       };
       const onReady = () => finish(true);
       const onError = () => finish(false);
-      const timeout = window.setTimeout(() => finish(false), 12000);
+      const timeout = window.setTimeout(() => finish(false), 6500);
       audio.addEventListener("canplay", onReady, { once: true });
       audio.addEventListener("error", onError, { once: true });
       audio.load();
@@ -1928,8 +1952,8 @@ async function getWordPronunciationBlob(text) {
 
 async function prepareCurrentPronunciation(text) {
   if (!text || currentWord?.word !== text) return;
-  setPronunciationButton("preparing", text);
-  const clip = await getPronunciationClip(text);
+  setPronunciationButton("idle", text);
+  const clip = await settleWithin(getPronunciationClip(text), 6000, null);
   if (currentWord?.word !== text || pronunciationAudio || pronunciationAudioSource) return;
   if (clip) {
     showNativePronunciationPlayer({ clip }, text);
@@ -1993,18 +2017,18 @@ function setPronunciationButton(status, text = currentWord?.word) {
   if (!button) return;
   const matchesCurrentWord = Boolean(text && currentWord?.word === text);
   const waiting = ["loading", "preparing"].includes(status) && matchesCurrentWord;
-  button.disabled = !currentWord || (status === "preparing" && matchesCurrentWord);
+  button.disabled = !currentWord;
   button.classList.toggle("loading", waiting);
   button.setAttribute("aria-busy", waiting ? "true" : "false");
   button.textContent = status === "preparing" && matchesCurrentWord
-    ? "准备真人发音…"
+    ? "▶ 播放发音"
     : status === "fallback" && matchesCurrentWord
       ? "▶ 设备发音"
     : status === "loading" && matchesCurrentWord
       ? "获取真人发音…"
       : status === "playing" && matchesCurrentWord
         ? "正在播放…"
-        : "▶ 真人发音";
+        : "▶ 播放发音";
 }
 
 function renderPronunciationSource(clip) {
@@ -2045,9 +2069,10 @@ function speakWithSystemVoice(text) {
   speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = state.settings.accent || "en-US";
-  const selected = speechSynthesis.getVoices().find((voice) => voice.voiceURI === state.settings.voiceURI);
+  const selected = selectSystemEnglishVoice();
   if (selected) utterance.voice = selected;
-  utterance.rate = 0.88;
+  utterance.rate = 0.82;
+  utterance.pitch = 0.96;
   speechSynthesis.speak(utterance);
   return true;
 }
@@ -2095,7 +2120,7 @@ async function speak(text, { notifyFallback = false } = {}) {
     ? { context: pronunciationAudioContext, ready: Promise.resolve() }
     : null;
   setPronunciationButton("loading", text);
-  const clip = await getPronunciationClip(text);
+  const clip = await settleWithin(getPronunciationClip(text), 7000, null);
   if (requestId !== pronunciationRequestId) return;
 
   if (clip && webAudio) {
@@ -2769,10 +2794,10 @@ function renderVoiceUI() {
   const latest = latestIndex >= 0 ? messages[latestIndex] : null;
   const translationButton = $("#aiVoiceTranslationToggle");
   const translationText = $("#aiVoiceTranslation");
-  const canTranslate = Boolean(latest && voiceSession.state !== "thinking" && voiceSession.transcript.includes("AI："));
+  const canTranslate = Boolean(latest?.translation);
   const expanded = canTranslate && visibleAITranslations.has(aiTranslationKey(latest, latestIndex));
   translationButton.hidden = !canTranslate;
-  translationButton.textContent = expanded ? "隐藏翻译" : "显示翻译";
+  translationButton.textContent = expanded ? "隐藏 AI 回答翻译" : "显示 AI 回答翻译";
   translationButton.setAttribute("aria-expanded", String(expanded));
   translationButton.dataset.aiTranslationIndex = canTranslate ? String(latestIndex) : "";
   translationText.hidden = !expanded;
@@ -3706,21 +3731,32 @@ async function requestAssessmentSpeech(text) {
   if (!deviceAIConfig.apiKey) throw new Error("发音相似度需要先在设置中保存智谱 API Key。" );
   if (Date.now() < zhipuSpeechUnavailableUntil) throw new Error(zhipuSpeechFailureReason || "智谱自然朗读暂时没有可用额度。" );
   const content = String(text || "").trim().slice(0, 900);
-  const response = await fetch(ZHIPU_TTS_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${deviceAIConfig.apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: "glm-tts",
-      input: content,
-      voice: "female",
-      speed: 0.88,
-      volume: 1,
-      response_format: "wav"
-    })
-  });
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 10000);
+  let response;
+  try {
+    response = await fetch(ZHIPU_TTS_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${deviceAIConfig.apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "glm-tts",
+        input: content,
+        voice: "female",
+        speed: 0.88,
+        volume: 1,
+        response_format: "wav"
+      }),
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("自然朗读连接超时，已改用设备发音。" );
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     if ([401, 403].includes(response.status)) throw new Error("智谱 API Key 无效或没有自然朗读权限。" );
@@ -4962,7 +4998,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=44", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=45", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
