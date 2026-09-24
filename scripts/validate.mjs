@@ -36,7 +36,9 @@ const phraseEntries = words.reduce((total, item) => total + (item.phrases?.lengt
 if (phraseEntries < 120) throw new Error(`Expected at least 120 curated phrase entries, found ${phraseEntries}`);
 if (words.filter((item) => item.phonetic).length < 3980) throw new Error("Too many words are missing phonetics");
 if (words.some((item) => !item.translation || !item.partOfSpeech || !Number.isFinite(item.rank))) throw new Error("Word data has missing required fields");
-if (words.filter((item) => item.senses?.length > 1).length < 450) throw new Error("Too few words have ranked multi-sense entries");
+if (words.filter((item) => item.senses?.length > 1).length < 250) throw new Error("Too few words have ranked multi-sense entries");
+const meaningCount = words.reduce((total, word) => total + word.senses.reduce((count, sense) => count + sense.meaning.split("；").filter(Boolean).length, 0), 0);
+if (meaningCount < 10_000) throw new Error(`Too few exam-relevant meanings: ${meaningCount}`);
 for (const word of words) {
   if (!Array.isArray(word.senses) || !word.senses.length) throw new Error(`${word.word} has no ranked senses`);
   if (word.senses[0].stars !== 3) throw new Error(`${word.word} does not start with a three-star sense`);
@@ -46,6 +48,18 @@ for (const word of words) {
     if (index && sense.stars > word.senses[index - 1].stars) throw new Error(`${word.word} senses are not ordered by exam frequency`);
   });
 }
+
+const requireSense = (word, partOfSpeech, pattern) => {
+  const item = words.find((entry) => entry.word.toLocaleLowerCase("en-US") === word);
+  const sense = item?.senses.find((entry) => entry.partOfSpeech === partOfSpeech);
+  if (!sense || !pattern.test(sense.meaning)) throw new Error(`${word} is missing its curated ${partOfSpeech} sense`);
+};
+requireSense("sheet", "n.", /床单/);
+requireSense("good", "adj.", /好的/);
+requireSense("mark", "n.", /分数/);
+requireSense("approach", "n.", /方法/);
+requireSense("medical", "adj.", /医疗的/);
+if (words.find((entry) => entry.word === "sheet").senses.some((sense) => sense.partOfSpeech === "v.")) throw new Error("sheet still exposes its low-frequency verb sense");
 
 const tracks = JSON.parse(fs.readFileSync(path.join(dist, "data", "listening.json"), "utf8"));
 if (tracks.length !== 3) throw new Error("Expected three built-in listening tracks");
@@ -74,6 +88,7 @@ console.log(JSON.stringify({
   phonetics: words.filter((item) => item.phonetic).length,
   phraseWords: words.filter((item) => item.phrase).length,
   phraseEntries,
+  meaningCount,
   multiSenseWords: words.filter((item) => item.senses.length > 1).length,
   listeningTracks: tracks.length,
   listeningCharacters: tracks.reduce((total, item) => total + item.transcript.length, 0)

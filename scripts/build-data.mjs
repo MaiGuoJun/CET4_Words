@@ -282,6 +282,153 @@ const senseOverrides = new Map(Object.entries({
   ]
 }));
 
+const coreSenseSupplements = new Map(Object.entries({
+  question: [["v.", "询问；质疑"]],
+  answer: [["v.", "回答；答复"]],
+  mark: [["n.", "标记；记号；分数"]],
+  base: [["v.", "以……为基础"]],
+  change: [["n.", "变化；改变；零钱"]],
+  good: [["adj.", "好的；优良的；有益的"]],
+  end: [["v.", "结束；终止"]],
+  human: [["adj.", "人类的；有人性的"]],
+  look: [["v.", "看；看起来"]],
+  research: [["v.", "研究；调查"]],
+  increase: [["v.", "增加；增长"]],
+  pay: [["n.", "工资；报酬"]],
+  result: [["v.", "导致；结果为"]],
+  report: [["v.", "报告；报道"]],
+  public: [["adj.", "公共的；公众的"]],
+  call: [["v.", "打电话；称呼；呼叫"]],
+  another: [["adj.", "另一个；又一"]],
+  general: [["adj.", "一般的；总的；普遍的"], ["n.", "将军"]],
+  medical: [["adj.", "医疗的；医学的"]],
+  lead: [["n.", "领导；领先；铅"]],
+  cost: [["n.", "成本；费用；代价"]],
+  offer: [["n.", "提议；报价"]],
+  experience: [["v.", "经历；体验"]],
+  test: [["v.", "测试；检验"]],
+  future: [["adj.", "未来的；将来的"]],
+  care: [["n.", "关心；照料；小心"]],
+  plan: [["v.", "计划；打算"]],
+  sense: [["v.", "感觉到；意识到"]],
+  control: [["v.", "控制；管理"]],
+  rise: [["v.", "上升；升起"]],
+  value: [["v.", "重视；给……估价"]],
+  individual: [["adj.", "个人的；个别的"]],
+  drive: [["n.", "驾驶；驱动力"]],
+  interest: [["v.", "使感兴趣"]],
+  support: [["v.", "支持；支撑"]],
+  market: [["v.", "销售；推销"]],
+  form: [["v.", "形成；组成"]],
+  present: [["n.", "现在；礼物"], ["adj.", "现在的；出席的"]],
+  record: [["v.", "记录；记载"]],
+  demand: [["v.", "要求；需要"]],
+  challenge: [["v.", "挑战；质疑"]],
+  store: [["v.", "储存；保存"]],
+  check: [["v.", "检查；核对"]],
+  list: [["v.", "列出；列入清单"]],
+  average: [["adj.", "平均的；普通的"]],
+  break: [["n.", "休息；中断；破裂"]],
+  note: [["v.", "注意；记录"]],
+  graduate: [["v.", "毕业"], ["n.", "毕业生"]],
+  interview: [["v.", "采访；面试"]],
+  focus: [["n.", "焦点；重点"]],
+  access: [["n.", "使用权"]],
+  approach: [["n.", "方法"]],
+  language: [["n.", "风格"]],
+  cause: [["v.", "造成；引起"]],
+  issue: [["n.", "期；期刊"]],
+  order: [["n.", "订单"]],
+  paper: [["n.", "试卷"]],
+  poor: [["adj.", "糟糕的；质量差的"]],
+  though: [["conj.", "尽管；虽然"]],
+  customer: [["n.", "顾客"]],
+  ever: [["adv.", "从来；曾经"]],
+  matter: [["n.", "问题；事情"]],
+  involve: [["v.", "涉及；包含"]],
+  fail: [["v.", "破产；倒闭"]],
+  item: [["n.", "物品；一件商品"]],
+  project: [["n.", "项目"]],
+  claim: [["v.", "声称；宣称"]],
+  decline: [["v.", "拒绝；谢绝"]],
+  please: [["v.", "使愉快；使满意"]],
+  content: [["n.", "目录"]],
+  gap: [["n.", "差距；分歧"]],
+  figure: [["n.", "人物"]],
+  fit: [["adj.", "健康的；合适的"]],
+  alone: [["adv.", "仅仅；只有"]],
+  couple: [["n.", "情侣；夫妻"]],
+  realize: [["v.", "认识到；意识到"]],
+  device: [["n.", "方法；手段"]],
+  court: [["n.", "球场"]],
+  engage: [["v.", "吸引；占用"]],
+  manage: [["v.", "设法做到"]],
+  aspect: [["n.", "样子；外观"]],
+  specific: [["adj.", "具体的；详细而明确的"]],
+  conduct: [["v.", "开展；进行"]],
+  reveal: [["v.", "展现；揭示"]],
+  prefer: [["v.", "偏爱；更喜欢"]],
+  derive: [["v.", "取得；获得"]],
+  intend: [["v.", "想要；打算"]],
+  grant: [["v.", "同意；准予"]],
+  establish: [["v.", "查实；证实"]],
+  union: [["n.", "一致；联合"]],
+  manner: [["n.", "方式；方法"]],
+  truth: [["n.", "真相；事实"]],
+  bit: [["n.", "一点；少量"]],
+  boost: [["v.", "增加；促进"]],
+  communicate: [["v.", "交流；沟通"]],
+  facility: [["n.", "天资；才能"]],
+  generate: [["v.", "引起；产生"]],
+  deliver: [["v.", "传输；递送"]],
+  household: [["n.", "一户；家庭"]],
+  context: [["n.", "环境；背景"]],
+  illustrate: [["v.", "给……加插图"]],
+  eliminate: [["v.", "淘汰；排除"]],
+  cope: [["v.", "处理；应付"]],
+  crowd: [["v.", "聚集；挤满"]],
+  contingent: [["n.", "代表团；一队人"]]
+}));
+
+const preferredPartOfSpeech = new Map(Object.entries({
+  good: "adj.",
+  mark: "n.",
+  look: "v.",
+  public: "adj.",
+  call: "v.",
+  general: "adj.",
+  medical: "adj.",
+  contingent: "n."
+}));
+
+const blockedPartOfSpeech = new Map(Object.entries({
+  sheet: ["v."],
+  company: ["v."],
+  medical: ["n."]
+}));
+
+const removedMeanings = new Map(Object.entries({
+  passage: ["移居"],
+  answer: ["回报", "答辩"],
+  mark: ["马克"],
+  sheet: ["印刷品"],
+  choice: ["精选品"],
+  increase: ["利益"],
+  paragraph: ["短评"],
+  important: ["大量的"],
+  report: ["传说", "爆炸声"],
+  health: ["蓬勃"],
+  develop: ["洗印"],
+  cause: ["目标"],
+  technology: ["术语"],
+  matter: ["重要", "原因"],
+  issue: ["后果", "流出"],
+  paper: ["证券"],
+  present: ["瞄准"],
+  general: ["一般", "大体", "常规"],
+  specific: ["具体地", "特定地"]
+}));
+
 function parseCsvLine(line) {
   const values = [];
   let value = "";
@@ -350,6 +497,23 @@ const partOfSpeechLabels = {
 };
 const partOfSpeechPattern = Object.keys(partOfSpeechLabels).join("|");
 
+const corpusPartOfSpeechLabels = {
+  n: "n.", v: "v.", a: "adj.", s: "adj.", d: "adv.", r: "adv.",
+  p: "prep.", c: "conj.", u: "aux.", m: "num.", q: "num."
+};
+
+function parseCorpusPartOfSpeech(value) {
+  const weights = new Map();
+  String(value || "").split("/").forEach((entry) => {
+    const match = entry.trim().match(/^([a-z]+):(\d+(?:\.\d+)?)$/i);
+    if (!match) return;
+    const label = corpusPartOfSpeechLabels[match[1].toLocaleLowerCase("en-US")];
+    if (!label) return;
+    weights.set(label, (weights.get(label) || 0) + Number(match[2]));
+  });
+  return weights;
+}
+
 function cleanMeaning(value) {
   if (/^\s*\[[^\]]+\]/.test(String(value || ""))) return "";
   return String(value || "")
@@ -412,7 +576,19 @@ function meaningSimilarity(left, right) {
   return (overlap / Math.max(1, Math.min(new Set(a).size, rightCharacters.size))) * 10;
 }
 
-function buildRankedSenses(coreTranslation, dictionaryTranslation, fallbackPartOfSpeech, rank) {
+function boundedMeaningSimilarity(left, right) {
+  const score = meaningSimilarity(left, right);
+  return score >= 100 ? 12 : score;
+}
+
+function chinesePartOfSpeechHint(meaning) {
+  const value = String(meaning || "").trim();
+  if (/的$/.test(value)) return "adj.";
+  if (/地$/.test(value)) return "adv.";
+  return "";
+}
+
+function buildRankedSenses(coreTranslation, dictionaryTranslation, fallbackPartOfSpeech, corpusPartOfSpeech, rank) {
   const coreMeanings = splitCoreMeanings(coreTranslation || normalizeTranslation(dictionaryTranslation));
   const dictionaryGroups = parseDictionarySenses(dictionaryTranslation);
   if (!dictionaryGroups.length) {
@@ -423,39 +599,56 @@ function buildRankedSenses(coreTranslation, dictionaryTranslation, fallbackPartO
     }];
   }
 
+  const usageWeights = parseCorpusPartOfSpeech(corpusPartOfSpeech);
   const selected = new Map();
   coreMeanings.forEach((meaning, index) => {
-    const candidates = dictionaryGroups.map((group, groupIndex) => ({
-      group,
-      groupIndex,
-      score: Math.max(0, ...group.meanings.map((candidate) => meaningSimilarity(meaning, candidate)))
-    })).sort((left, right) => right.score - left.score || left.groupIndex - right.groupIndex);
+    const candidates = dictionaryGroups.flatMap((group, groupIndex) => group.meanings.map((candidate, candidateIndex) => {
+      const semanticScore = boundedMeaningSimilarity(meaning, candidate);
+      const usageScore = (usageWeights.get(group.partOfSpeech) || 0) * 0.12;
+      const hint = chinesePartOfSpeechHint(meaning);
+      const grammarScore = hint === group.partOfSpeech ? 4 : hint ? -2 : 0;
+      return { group, groupIndex, candidate, candidateIndex, semanticScore, score: semanticScore + usageScore + grammarScore };
+    })).sort((left, right) => right.score - left.score || right.semanticScore - left.semanticScore || left.groupIndex - right.groupIndex || left.candidateIndex - right.candidateIndex);
     const best = candidates[0];
+    if (!best || best.semanticScore < 3.5) return;
     if (!selected.has(best.group.partOfSpeech)) {
-      selected.set(best.group.partOfSpeech, { group: best.group, coreMeanings: [], firstIndex: index });
+      selected.set(best.group.partOfSpeech, { group: best.group, matchedMeanings: [], matchScore: 0, firstIndex: index });
     }
     const entry = selected.get(best.group.partOfSpeech);
-    if (!entry.coreMeanings.includes(meaning)) entry.coreMeanings.push(meaning);
+    if (!entry.matchedMeanings.includes(best.candidate)) entry.matchedMeanings.push(best.candidate);
+    entry.matchScore += best.score;
     entry.firstIndex = Math.min(entry.firstIndex, index);
   });
 
-  if (rank <= 1200) {
+  if (!selected.size) {
+    const fallback = [...dictionaryGroups].sort((left, right) => (usageWeights.get(right.partOfSpeech) || 0) - (usageWeights.get(left.partOfSpeech) || 0))[0];
+    selected.set(fallback.partOfSpeech, { group: fallback, matchedMeanings: [], matchScore: usageWeights.get(fallback.partOfSpeech) || 0, firstIndex: 0 });
+  }
+
+  if (rank <= 1600) {
     dictionaryGroups.forEach((group) => {
       if (selected.has(group.partOfSpeech)) return;
-      const score = Math.max(0, ...coreMeanings.flatMap((meaning) => group.meanings.map((candidate) => meaningSimilarity(meaning, candidate))));
-      if (score >= 8) selected.set(group.partOfSpeech, { group, coreMeanings: [], firstIndex: coreMeanings.length });
+      const semanticScore = Math.max(0, ...coreMeanings.flatMap((meaning) => group.meanings.map((candidate) => boundedMeaningSimilarity(meaning, candidate))));
+      const usageScore = usageWeights.get(group.partOfSpeech) || 0;
+      if (usageScore >= 18) {
+        selected.set(group.partOfSpeech, { group, matchedMeanings: [], matchScore: semanticScore + usageScore * 0.12, firstIndex: coreMeanings.length });
+      }
     });
   }
 
-  const maxSenseCount = rank <= 1200 ? 4 : 3;
-  const maxMeanings = rank <= 1200 ? 3 : rank <= 2600 ? 2 : 1;
+  const maxSenseCount = rank <= 1200 ? 4 : rank <= 2600 ? 3 : 2;
+  const primaryMeaningCount = rank <= 1200 ? 4 : rank <= 2600 ? 3 : 2;
+  const secondaryMeaningCount = rank <= 1200 ? 3 : rank <= 2600 ? 2 : 1;
   return [...selected.values()]
-    .sort((left, right) => left.firstIndex - right.firstIndex)
+    .sort((left, right) => right.matchScore - left.matchScore
+      || (usageWeights.get(right.group.partOfSpeech) || 0) - (usageWeights.get(left.group.partOfSpeech) || 0)
+      || left.firstIndex - right.firstIndex)
     .slice(0, maxSenseCount)
     .map((entry, index) => {
-      const meanings = [...entry.coreMeanings];
+      const meanings = [...entry.matchedMeanings];
+      const maxMeanings = index === 0 ? primaryMeaningCount : secondaryMeaningCount;
       for (const candidate of entry.group.meanings) {
-        if (meanings.length >= Math.max(maxMeanings, entry.coreMeanings.length)) break;
+        if (meanings.length >= maxMeanings) break;
         const repeatsExisting = meanings.some((meaning) => meaningSimilarity(meaning, candidate) >= 100);
         if (!repeatsExisting) meanings.push(candidate);
       }
@@ -465,6 +658,36 @@ function buildRankedSenses(coreTranslation, dictionaryTranslation, fallbackPartO
         stars: Math.max(1, 3 - index * 0.5)
       };
     });
+}
+
+function curateSenses(word, sourceSenses, rank) {
+  const blocked = new Set(blockedPartOfSpeech.get(word) || []);
+  const senses = sourceSenses.filter((sense) => !blocked.has(sense.partOfSpeech)).map((sense) => ({ ...sense }));
+  const supplements = coreSenseSupplements.get(word) || [];
+  supplements.forEach(([partOfSpeech, meaning]) => {
+    const existing = senses.find((sense) => sense.partOfSpeech === partOfSpeech);
+    if (existing) {
+      const meanings = [];
+      [...meaning.split("；"), ...existing.meaning.split("；")].filter(Boolean).forEach((candidate) => {
+        if (!meanings.some((current) => meaningSimilarity(current, candidate) >= 100)) meanings.push(candidate);
+      });
+      existing.meaning = meanings.slice(0, rank <= 1200 ? 5 : 4).join("；");
+    } else {
+      senses.push({ partOfSpeech, meaning, stars: 1 });
+    }
+  });
+  const removed = new Set(removedMeanings.get(word) || []);
+  for (let index = senses.length - 1; index >= 0; index -= 1) {
+    const meanings = senses[index].meaning.split("；").filter((meaning) => meaning && !removed.has(meaning));
+    if (!meanings.length) senses.splice(index, 1);
+    else senses[index].meaning = meanings.join("；");
+  }
+  const preferred = preferredPartOfSpeech.get(word);
+  if (preferred) senses.sort((left, right) => Number(right.partOfSpeech === preferred) - Number(left.partOfSpeech === preferred));
+  return senses.slice(0, rank <= 1200 ? 4 : 3).map((sense, index) => ({
+    ...sense,
+    stars: Math.max(1, 3 - index * 0.5)
+  }));
 }
 
 if (!fs.existsSync(cetPath) || !fs.existsSync(ecdictPath)) {
@@ -535,8 +758,9 @@ const output = selectedRows.filter((row) => {
   const extra = supplements.get(normalized) || {};
   const coreTranslation = String(row["释义"] || "").trim();
   const fallbackPartOfSpeech = extractPartsOfSpeech(extra.translation, row["单词"]);
-  const senses = senseOverrides.get(normalized)
-    || buildRankedSenses(coreTranslation, extra.translation, fallbackPartOfSpeech, row["序号"]);
+  const generatedSenses = senseOverrides.get(normalized)
+    || buildRankedSenses(coreTranslation, extra.translation, fallbackPartOfSpeech, extra.pos, row["序号"]);
+  const senses = curateSenses(normalized, generatedSenses, row["序号"]);
   const phraseList = phraseIndex.get(normalized) || [];
   const primaryPhrase = phraseList[0];
   return {
