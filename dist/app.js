@@ -2642,6 +2642,13 @@ async function importAudio(event) {
   }
 }
 
+function closeAudioImportDialog() {
+  const dialog = $("#audioImportDialog");
+  if (!dialog?.open) return;
+  dialog.close("cancel");
+  $("#audioImportForm").reset();
+}
+
 function ensureAIState() {
   if (!state.ai || typeof state.ai !== "object") state.ai = defaultAIState();
   if (!AI_SCENARIOS[state.ai.scenario]) state.ai.scenario = "campus";
@@ -4868,6 +4875,15 @@ function bindEvents() {
   });
   $("#completeListening").addEventListener("click", completeListening);
   $("#openImportAudio").addEventListener("click", () => $("#audioImportDialog").showModal());
+  $("#closeAudioImport").addEventListener("click", closeAudioImportDialog);
+  $("#cancelAudioImport").addEventListener("click", closeAudioImportDialog);
+  $("#audioImportDialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeAudioImportDialog();
+  });
+  $("#audioImportDialog").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeAudioImportDialog();
+  });
   $("#audioImportForm").addEventListener("submit", importAudio);
 
   $$('[data-ai-scenario]').forEach((button) => button.addEventListener("click", () => selectAIScenario(button.dataset.aiScenario)));
@@ -5073,7 +5089,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=50", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=51", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
