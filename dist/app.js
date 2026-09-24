@@ -2617,7 +2617,11 @@ function renderShadowingResult(message, index) {
   if (active && shadowingState.error) return `<div class="shadowing-result error">${escapeHtml(shadowingState.error)}</div>`;
   const result = active && shadowingState.status === "complete" ? shadowingState : message?.shadowing;
   if (!result) return "";
-  return `<div class="shadowing-result"><div><strong>${Number(result.score) || 0}</strong><span>综合跟读分</span></div><div class="shadowing-score-parts"><span>内容 ${Number.isFinite(result.textScore) ? result.textScore : "—"}</span><span>发音相似度 ${Number.isFinite(result.soundScore) ? result.soundScore : "—"}</span><span>节奏 ${Number.isFinite(result.rhythmScore) ? result.rhythmScore : "—"}</span></div><p><b>识别到：</b>${escapeHtml(result.recognized || "未启用文字识别")}</p><p><b>建议：</b>${escapeHtml(pronunciationAdvice(result))}</p><small>综合分同时比较识别文字、声音频谱、时长与能量节奏；仍不等同于专业逐音素测评。</small></div>`;
+  const basic = result.basic === true || !Number.isFinite(result.soundScore);
+  const note = basic
+    ? "基础评分：内容根据语音识别结果判断，节奏根据录音语速和连续性估算；不包含标准音色对比。"
+    : "完整声音评分：综合比较识别文字、声音频谱、时长与能量节奏；仍不等同于专业逐音素测评。";
+  return `<div class="shadowing-result"><div><strong>${Number(result.score) || 0}</strong><span>${basic ? "基础跟读分" : "综合跟读分"}</span></div><div class="shadowing-score-parts"><span>内容 ${Number.isFinite(result.textScore) ? result.textScore : "—"}</span><span>发音相似度 ${Number.isFinite(result.soundScore) ? result.soundScore : "—"}</span><span>节奏 ${Number.isFinite(result.rhythmScore) ? result.rhythmScore : "—"}</span></div><p><b>识别到：</b>${escapeHtml(result.recognized || "未识别到文字")}</p><p><b>建议：</b>${escapeHtml(pronunciationAdvice({ ...result, basic }))}</p><small>${note}</small></div>`;
 }
 
 function renderWritingReview() {
@@ -3080,12 +3084,33 @@ function combinedPronunciationScore({ textScore, soundScore, rhythmScore, senten
   return totalWeight ? Math.round(values.reduce((total, [value, weight]) => total + value * weight, 0) / totalWeight) : 0;
 }
 
-function pronunciationAdvice({ textScore, soundScore, rhythmScore }) {
+function pronunciationAdvice({ textScore, soundScore, rhythmScore, basic = false }) {
   const advice = [];
   if (Number.isFinite(textScore) && textScore < 80) advice.push("读音可能改变了单词或漏读；对照音标逐段慢读。" );
   if (Number.isFinite(soundScore) && soundScore < 70) advice.push("音色轨迹与标准音差异较大，重点检查元音是否饱满、辅音是否到位。" );
-  if (Number.isFinite(rhythmScore) && rhythmScore < 70) advice.push("时长或轻重节奏偏差较大，先听标准音，再模仿停连与重音。" );
-  return advice[0] || "整体接近标准音，可以尝试用自然语速再读一次。";
+  if (Number.isFinite(rhythmScore) && rhythmScore < 70) advice.push(basic ? "语速或停顿不够自然；放慢一点，按意群连续读完。" : "时长或轻重节奏偏差较大，先听标准音，再模仿停连与重音。" );
+  return advice[0] || (basic ? "内容和语速整体不错；当前是基础评分，暂未比较标准音色。" : "整体接近标准音，可以尝试用自然语速再读一次。");
+}
+
+function scoreStandaloneRhythmFeatures(learner, referenceText) {
+  const wordCount = Math.max(1, (String(referenceText || "").match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || []).length);
+  const speakingRate = wordCount / Math.max(0.25, learner.duration);
+  const idealRate = 2.15;
+  const rateScore = Math.max(0, Math.min(100, 100 - Math.abs(Math.log(Math.max(0.2, speakingRate) / idealRate)) * 72));
+  const energies = learner.frames.map((frame) => frame.energy);
+  const activeRatio = energies.filter((energy) => energy >= 0.16).length / Math.max(1, energies.length);
+  const continuityScore = Math.max(0, Math.min(100, 100 - Math.abs(activeRatio - 0.78) * 125));
+  return {
+    rhythmScore: Math.round(rateScore * 0.72 + continuityScore * 0.28),
+    learnerDuration: learner.duration,
+    speakingRate: Math.round(speakingRate * 100) / 100
+  };
+}
+
+async function scoreStandaloneRhythm(learnerBlob, referenceText) {
+  const learnerAudio = await decodeAudioSamples(learnerBlob);
+  const learner = extractPronunciationFeatures(learnerAudio.samples, learnerAudio.sampleRate);
+  return scoreStandaloneRhythmFeatures(learner, referenceText);
 }
 
 async function requestCloudTranscription(wavBlob) {
@@ -3489,16 +3514,23 @@ async function finishShadowingScore(messageIndex, recognized, learnerWav = null)
   if (!message || shadowingState.messageIndex !== messageIndex) return;
   const textScore = recognized ? scoreTextMatch(message.content, recognized).score : null;
   let acoustic = { soundScore: null, rhythmScore: null };
+  let basic = !learnerWav;
   if (learnerWav) {
-    const reference = await getShadowingReferenceBlob(message.content);
-    acoustic = await comparePronunciationAudio(learnerWav, reference);
+    try {
+      const reference = await getShadowingReferenceBlob(message.content);
+      acoustic = await comparePronunciationAudio(learnerWav, reference);
+    } catch {
+      acoustic = await scoreStandaloneRhythm(learnerWav, message.content);
+      basic = true;
+    }
   }
   const result = {
     textScore,
     soundScore: acoustic.soundScore,
     rhythmScore: acoustic.rhythmScore,
     score: combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore, sentence: true }),
-    recognized
+    recognized,
+    basic
   };
   shadowingState.status = "complete";
   Object.assign(shadowingState, result);
@@ -4930,7 +4962,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=43", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=44", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

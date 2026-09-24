@@ -32,6 +32,8 @@ requireText(app, "data-ai-shadow-index", "shadowing control");
 requireText(app, "listeningWordStates", "separate listening SRS state");
 requireText(server, 'body.task === "writing"', "server writing review route");
 requireText(app, "comparePronunciationAudio", "acoustic pronunciation comparison");
+requireText(app, "scoreStandaloneRhythm", "no-TTS shadowing rhythm fallback");
+requireText(app, "基础跟读分", "basic shadowing score label");
 requireText(app, "requestAzurePronunciationAssessment", "Azure phoneme pronunciation assessment");
 requireText(app, "fetchZhipuWordPronunciation", "Zhipu word pronunciation fallback");
 requireText(app, "renderPhonemeAssessment", "phoneme score rendering");
@@ -41,6 +43,6 @@ requireText(app, 'if (mode === "review")', "review group queue");
 requireText(app, "soundScore", "acoustic score component");
 requireText(app, "rhythmScore", "rhythm score component");
 requireText(html, 'id="assessWordPronunciation"', "word pronunciation assessment control");
-requireText(html, "app.js?v=43", "v43 script cache bust");
+requireText(html, "app.js?v=44", "v44 script cache bust");
 
 console.log("AI contract smoke test passed");
