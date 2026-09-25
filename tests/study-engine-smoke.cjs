@@ -26,7 +26,21 @@ source = source.replace(/init\(\);\s*$/, `
     "known-old": { status: "known", learnedAt: "2026-08-01T00:00:00Z", lastReviewedAt: "2026-09-02T00:00:00Z" }
   };
   const reviewWords = createStudyQueue("review").map((word) => word.word);
-  globalThis.__studyResults = { exact, partial, srs, sentences, featureFrames: features.frames.length, duration: features.duration, combined, sameSound, differentSound, basicRhythm, reviewWords };
+  allWords = [
+    { word: "cet4-word", level: "CET4", course: "cet4" },
+    { word: "cet6-word", level: "CET6", course: "cet6" },
+    { word: "postgrad-word", level: "POSTGRAD", course: "cet6", isPostgradExtension: true }
+  ];
+  state.settings.course = "cet4";
+  activateCourseWords();
+  const cet4CourseWords = words.map((word) => word.word);
+  state.settings.course = "cet6";
+  activateCourseWords();
+  const advancedCourseWords = words.map((word) => word.word);
+  const legacyDaily = { screened: 12, learned: 3, quizCorrect: 2, quizTotal: 4, focusSeconds: 600, target: 25 };
+  const migratedCet4 = courseDailyRecord(legacyDaily, "cet4", false);
+  const migratedCet6 = courseDailyRecord(legacyDaily, "cet6", true);
+  globalThis.__studyResults = { exact, partial, srs, sentences, featureFrames: features.frames.length, duration: features.duration, combined, sameSound, differentSound, basicRhythm, reviewWords, cet4CourseWords, advancedCourseWords, migratedCet4, migratedCet6 };
 `);
 
 const storage = new Map();
@@ -46,4 +60,7 @@ if (result.combined !== 83) throw new Error("Pronunciation component weights cha
 if (result.sameSound.soundScore <= result.differentSound.soundScore) throw new Error("Acoustic scoring should prefer identical audio features");
 if (result.basicRhythm.rhythmScore < 70 || result.basicRhythm.rhythmScore > 100) throw new Error("Standalone rhythm fallback should produce a useful bounded score");
 if (result.reviewWords.join(",") !== "unknown-new,fuzzy-old,known-old,known-newer") throw new Error(`Review group priority is incorrect: ${result.reviewWords.join(",")}`);
+if (result.cet4CourseWords.join(",") !== "cet4-word") throw new Error("CET-4 course filtering is incorrect");
+if (result.advancedCourseWords.join(",") !== "cet6-word,postgrad-word") throw new Error("Advanced-course filtering is incorrect");
+if (result.migratedCet4.learned !== 3 || result.migratedCet6.learned !== 0) throw new Error("Legacy daily progress did not migrate into an isolated CET-4 record");
 console.log("Study engine smoke test passed");

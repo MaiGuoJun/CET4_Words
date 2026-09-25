@@ -149,6 +149,8 @@ const defaultState = () => ({
     examDate: EXAM_DEFAULT,
     scoreGoal: 500,
     dailyTarget: 25,
+    dailyTargets: { cet4: 25, cet6: 25 },
+    course: "cet4",
     targetIsManual: false,
     targetManualDate: null,
     theme: "system",
@@ -164,11 +166,13 @@ const defaultState = () => ({
   completedListening: [],
   ai: defaultAIState(),
   vocabAssessment: defaultVocabAssessment(),
+  vocabAssessments: { cet4: defaultVocabAssessment(), cet6: defaultVocabAssessment() },
   lastBackupAt: null,
   createdAt: new Date().toISOString()
 });
 
 let state = loadState();
+let allWords = [];
 let words = [];
 let listeningTracks = [];
 let currentView = "today";
@@ -273,10 +277,31 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 function normalizeState(parsed) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return defaultState();
   const base = defaultState();
+  const selectedCourse = parsed.settings?.course === "cet6" ? "cet6" : "cet4";
+  const normalizeAssessment = (value) => ({
+    ...defaultVocabAssessment(),
+    ...(value || {}),
+    questions: Array.isArray(value?.questions) ? value.questions : [],
+    answers: Array.isArray(value?.answers) ? value.answers : []
+  });
+  const legacyAssessment = normalizeAssessment(parsed.vocabAssessment);
+  const vocabAssessments = {
+    cet4: normalizeAssessment(parsed.vocabAssessments?.cet4 || legacyAssessment),
+    cet6: normalizeAssessment(parsed.vocabAssessments?.cet6)
+  };
   return {
     ...base,
     ...parsed,
-    settings: { ...base.settings, ...(parsed.settings || {}) },
+    settings: {
+      ...base.settings,
+      ...(parsed.settings || {}),
+      course: selectedCourse,
+      dailyTarget: Number(parsed.settings?.dailyTargets?.[selectedCourse]) || Number(parsed.settings?.dailyTarget) || 25,
+      dailyTargets: {
+        cet4: Number(parsed.settings?.dailyTargets?.cet4) || Number(parsed.settings?.dailyTarget) || 25,
+        cet6: Number(parsed.settings?.dailyTargets?.cet6) || 25
+      }
+    },
     wordStates: parsed.wordStates && typeof parsed.wordStates === "object" ? parsed.wordStates : {},
     pronunciationScores: parsed.pronunciationScores && typeof parsed.pronunciationScores === "object" ? parsed.pronunciationScores : {},
     listeningWordStates: parsed.listeningWordStates && typeof parsed.listeningWordStates === "object" ? parsed.listeningWordStates : {},
@@ -289,12 +314,8 @@ function normalizeState(parsed) {
       sessions: { ...(parsed.ai?.sessions || {}) },
       writingReviews: Array.isArray(parsed.ai?.writingReviews) ? parsed.ai.writingReviews : []
     },
-    vocabAssessment: {
-      ...base.vocabAssessment,
-      ...(parsed.vocabAssessment || {}),
-      questions: Array.isArray(parsed.vocabAssessment?.questions) ? parsed.vocabAssessment.questions : [],
-      answers: Array.isArray(parsed.vocabAssessment?.answers) ? parsed.vocabAssessment.answers : []
-    }
+    vocabAssessment: vocabAssessments[selectedCourse],
+    vocabAssessments
   };
 }
 
@@ -348,6 +369,10 @@ function syncDeviceId() {
 }
 
 function persistState() {
+  state.vocabAssessments ||= { cet4: defaultVocabAssessment(), cet6: defaultVocabAssessment() };
+  state.vocabAssessments[activeCourse()] = state.vocabAssessment;
+  state.settings.dailyTargets ||= { cet4: 25, cet6: 25 };
+  state.settings.dailyTargets[activeCourse()] = state.settings.dailyTarget;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
@@ -425,6 +450,18 @@ function mergeCloudStates(localState, remoteState) {
     for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
       if (typeof left[key] === "number" || typeof right[key] === "number") daily[date][key] = Math.max(Number(left[key]) || 0, Number(right[key]) || 0);
     }
+    const courses = {};
+    for (const course of ["cet4", "cet6"]) {
+      const leftCourse = courseDailyRecord(left, course, false) || {};
+      const rightCourse = courseDailyRecord(right, course, false) || {};
+      courses[course] = { ...leftCourse, ...rightCourse };
+      for (const key of new Set([...Object.keys(leftCourse), ...Object.keys(rightCourse)])) {
+        if (typeof leftCourse[key] === "number" || typeof rightCourse[key] === "number") {
+          courses[course][key] = Math.max(Number(leftCourse[key]) || 0, Number(rightCourse[key]) || 0);
+        }
+      }
+    }
+    daily[date].courses = courses;
   }
 
   const listening = new Map();
@@ -509,6 +546,8 @@ async function syncNow({ notify = false } = {}) {
       const localChanged = JSON.stringify(merged) !== JSON.stringify(state);
       const remoteChanged = !remote.state || JSON.stringify(merged) !== JSON.stringify(normalizeState(remote.state));
       state = merged;
+      activateCourseWords();
+      initializeWordInsightIndex();
       persistState();
       if (localChanged) {
         applyTheme();
@@ -527,6 +566,8 @@ async function syncNow({ notify = false } = {}) {
       cloudSync.revision = Number(remote.revision) || cloudSync.revision;
       if (remote.state) {
         state = mergeCloudStates(state, remote.state);
+        activateCourseWords();
+        initializeWordInsightIndex();
         persistState();
       }
       break;
@@ -626,11 +667,42 @@ function addDays(dateString, amount) {
   return localDateKey(date);
 }
 
+function activeCourse() {
+  return state.settings.course === "cet6" ? "cet6" : "cet4";
+}
+
+function courseLabel(course = activeCourse()) {
+  return course === "cet6" ? "六级・考研英语" : "英语四级";
+}
+
+function emptyDailyRecord(target = state.settings.dailyTarget) {
+  return { screened: 0, learned: 0, quizCorrect: 0, quizTotal: 0, focusSeconds: 0, target };
+}
+
+function courseDailyRecord(root, course = activeCourse(), create = false) {
+  if (!root) return create ? emptyDailyRecord() : null;
+  if (!root.courses) {
+    root.courses = {
+      cet4: {
+        screened: Number(root.screened) || 0,
+        learned: Number(root.learned) || 0,
+        quizCorrect: Number(root.quizCorrect) || 0,
+        quizTotal: Number(root.quizTotal) || 0,
+        focusSeconds: Number(root.focusSeconds) || 0,
+        target: Number(root.target) || Number(state.settings.dailyTargets?.cet4) || 25
+      }
+    };
+  }
+  if (create && !root.courses[course]) root.courses[course] = emptyDailyRecord(Number(state.settings.dailyTargets?.[course]) || 25);
+  return root.courses[course] || null;
+}
+
 function todayRecord() {
   const key = localDateKey();
-  state.daily[key] ||= { screened: 0, learned: 0, quizCorrect: 0, quizTotal: 0, focusSeconds: 0, target: state.settings.dailyTarget };
-  state.daily[key].target ||= state.settings.dailyTarget;
-  return state.daily[key];
+  state.daily[key] ||= { courses: {} };
+  const record = courseDailyRecord(state.daily[key], activeCourse(), true);
+  record.target ||= state.settings.dailyTarget;
+  return record;
 }
 
 function escapeHtml(value = "") {
@@ -670,7 +742,7 @@ function recentMissedDebt() {
   for (let offset = 1; offset <= 7; offset += 1) {
     const date = new Date();
     date.setDate(date.getDate() - offset);
-    const record = state.daily[localDateKey(date)];
+    const record = courseDailyRecord(state.daily[localDateKey(date)], activeCourse(), false);
     if (!record) continue;
     debt += Math.max(0, (record.target || 20) - (record.learned || 0));
   }
@@ -679,8 +751,10 @@ function recentMissedDebt() {
 
 function recommendedDailyTarget() {
   if (!words.length) return 25;
+  if (activeCourse() === "cet6") return Math.min(50, 25 + Math.min(5, Math.ceil(recentMissedDebt() / 7)));
   const counts = stateCounts();
-  const assumedRemaining = Math.max(0, words.length - Math.max(counts.known, state.settings.presumedKnown || 0));
+  const presumedKnown = activeCourse() === "cet4" ? state.settings.presumedKnown || 0 : 0;
+  const assumedRemaining = Math.max(0, words.length - Math.max(counts.known, presumedKnown));
   const explicitLearning = counts.fuzzy + counts.unknown;
   const remaining = Math.max(assumedRemaining, explicitLearning);
   const days = Math.max(1, daysUntilExam() - 1);
@@ -696,7 +770,7 @@ function applyRecommendedTarget() {
   }
   if (!state.settings.targetIsManual) {
     state.settings.dailyTarget = recommendedDailyTarget();
-    const current = state.daily[localDateKey()];
+    const current = courseDailyRecord(state.daily[localDateKey()], activeCourse(), false);
     if (current) current.target = state.settings.dailyTarget;
   }
 }
@@ -726,7 +800,7 @@ function applyTheme() {
 
 async function loadContent() {
   const [wordResult, trackResult] = await Promise.allSettled([
-    fetch("./data/words.json?v=10").then((response) => {
+    fetch("./data/words.json?v=11").then((response) => {
       if (!response.ok) throw new Error("word data unavailable");
       return response.json();
     }),
@@ -735,12 +809,48 @@ async function loadContent() {
       return response.json();
     })
   ]);
-  words = wordResult.status === "fulfilled" && wordResult.value.length ? wordResult.value : fallbackWords;
+  allWords = wordResult.status === "fulfilled" && wordResult.value.length ? wordResult.value : fallbackWords;
+  activateCourseWords();
   initializeWordInsightIndex();
   listeningTracks = trackResult.status === "fulfilled" ? trackResult.value : [];
   listeningTracks.push(...(await getAllLocalTracks()));
   applyRecommendedTarget();
   saveState();
+}
+
+function wordBelongsToCourse(word, course = activeCourse()) {
+  if (course === "cet6") return word.course === "cet6" || word.level === "CET6" || word.level === "POSTGRAD" || word.isPostgradExtension;
+  return word.course === "cet4" || (!word.course && word.level !== "CET6" && word.level !== "POSTGRAD" && !word.isCET6Supplement);
+}
+
+function activateCourseWords() {
+  words = allWords.filter((word) => wordBelongsToCourse(word));
+}
+
+function switchCourse(nextCourse) {
+  const next = nextCourse === "cet6" ? "cet6" : "cet4";
+  const previous = activeCourse();
+  if (next === previous) return;
+  state.vocabAssessments[previous] = state.vocabAssessment;
+  state.settings.dailyTargets[previous] = state.settings.dailyTarget;
+  state.settings.course = next;
+  state.settings.dailyTarget = Number(state.settings.dailyTargets[next]) || 25;
+  state.settings.targetIsManual = false;
+  state.settings.targetManualDate = null;
+  state.vocabAssessment = state.vocabAssessments[next] || defaultVocabAssessment();
+  state.vocabAssessments[next] = state.vocabAssessment;
+  activateCourseWords();
+  initializeWordInsightIndex();
+  wordLibraryState = { ...wordLibraryState, level: "all", page: 1 };
+  studyQueue = [];
+  quizQueue = [];
+  currentWord = null;
+  currentQuiz = null;
+  $("#studyPanel").hidden = true;
+  applyRecommendedTarget();
+  saveState();
+  renderAll();
+  toast(`已切换到${courseLabel(next)}`, `${words.length.toLocaleString("zh-CN")} 个词，学习进度与每日记录独立计算。`);
 }
 
 function renderNavigation() {
@@ -765,6 +875,16 @@ function renderHeader() {
   const dateText = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date());
   $("#todayDate").textContent = dateText;
   $$('[data-countdown]').forEach((node) => { node.textContent = daysUntilExam(); });
+  $$('[data-course-select]').forEach((select) => { select.value = activeCourse(); });
+  $$('[data-course-label]').forEach((node) => { node.textContent = activeCourse() === "cet6" ? "CET-6 / KY" : "CET-4"; });
+  const levelSelect = $("#wordLibraryLevel");
+  if (levelSelect && levelSelect.dataset.course !== activeCourse()) {
+    levelSelect.dataset.course = activeCourse();
+    levelSelect.innerHTML = activeCourse() === "cet6"
+      ? '<option value="all">全部高级课程</option><option value="cet6">六级核心</option><option value="postgrad">考研英语扩展</option>'
+      : '<option value="all">全部四级词汇</option>';
+    wordLibraryState.level = "all";
+  }
 }
 
 function dueWords() {
@@ -803,7 +923,9 @@ function renderToday() {
   $("#todayTarget").textContent = target;
   $("#settingsTargetOutput").textContent = target;
   $("#dailyTargetInput").value = target;
-  $("#targetReason").textContent = state.settings.targetIsManual ? "已手动调整（20–50）" : `按剩余词量推荐 ${recommendedDailyTarget()} 个`;
+  $("#targetReason").textContent = state.settings.targetIsManual
+    ? "已手动调整（20–50）"
+    : activeCourse() === "cet6" ? `高级课程默认 ${recommendedDailyTarget()} 个` : `按剩余词量推荐 ${recommendedDailyTarget()} 个`;
   $("#dueCount").textContent = `${due} 个`;
   $("#newCount").textContent = record.learned > target ? `${target} / ${target} · 加练 ${record.learned - target}` : `${record.learned} / ${target}`;
   $("#quizCount").textContent = record.quizTotal ? `${record.quizCorrect} / ${record.quizTotal}` : "未开始";
@@ -850,8 +972,8 @@ function renderToday() {
   updateStageStates(record, due, quizDone, listened);
 }
 
-function cet4PlacementWords() {
-  return words.filter((word) => !word.isCET6Supplement && word.level !== "CET6");
+function placementWords() {
+  return words;
 }
 
 function primaryTestMeaning(word) {
@@ -863,7 +985,7 @@ function primaryTestMeaning(word) {
 }
 
 function createVocabAssessmentQuestions() {
-  const pool = cet4PlacementWords();
+  const pool = placementWords();
   const bucketCount = 8;
   const questionsPerBucket = 3;
   const bucketSize = Math.ceil(pool.length / bucketCount);
@@ -995,7 +1117,7 @@ function answerVocabTest(optionIndex) {
 function completeVocabAssessment() {
   const assessment = state.vocabAssessment;
   if (assessment.status !== "active") return;
-  const pool = cet4PlacementWords();
+  const pool = placementWords();
   const answers = assessment.answers.slice(0, assessment.questions.length);
   const correct = answers.filter((answer) => answer.correct).length;
   const total = Math.max(1, assessment.questions.length);
@@ -1153,11 +1275,12 @@ function frequencyStars(value) {
 function renderWordLevel(word) {
   const badge = $("#wordLevel");
   if (!badge) return;
-  const isCET6 = Boolean(word?.isCET6Supplement || word?.level === "CET6");
+  const label = wordLevelLabel(word);
+  const isAdvanced = label !== "四级";
   badge.hidden = !word;
-  badge.textContent = isCET6 ? "六级补充" : "四级";
-  badge.classList.toggle("cet6", isCET6);
-  $("#meaningTitle").textContent = isCET6 ? "六级补充词义" : "四级考频义项";
+  badge.textContent = label;
+  badge.classList.toggle("cet6", isAdvanced);
+  $("#meaningTitle").textContent = word?.isPostgradExtension || word?.level === "POSTGRAD" ? "考研英语常用义项" : isAdvanced ? "六级考频义项" : "四级考频义项";
 }
 
 function renderWordMeanings(word) {
@@ -1236,7 +1359,8 @@ function conciseWordMeaning(word) {
 }
 
 function wordLevelLabel(word) {
-  return word?.isCET6Supplement || word?.level === "CET6" ? "六级补充" : "四级";
+  if (word?.isPostgradExtension || word?.level === "POSTGRAD") return "考研扩展";
+  return word?.isCET6Supplement || word?.level === "CET6" ? "六级核心" : "四级";
 }
 
 function findWordRoots(value) {
@@ -1348,7 +1472,7 @@ function relatedWordsMarkup(items, emptyText) {
     <article class="related-word-item">
       <div><strong>${escapeHtml(item.word)}</strong><span>${escapeHtml(item.partOfSpeech || "")}</span></div>
       <p>${escapeHtml(conciseWordMeaning(item))}</p>
-      <small class="word-level-chip ${item.isCET6Supplement || item.level === "CET6" ? "cet6" : ""}">${wordLevelLabel(item)}</small>
+      <small class="word-level-chip ${wordLevelLabel(item) !== "四级" ? "cet6" : ""}">${wordLevelLabel(item)}</small>
     </article>
   `).join("")}</div>`;
 }
@@ -2246,6 +2370,7 @@ function renderVoices() {
 
 function setDailyTarget(value, manual = true) {
   state.settings.dailyTarget = Math.max(20, Math.min(50, Number(value) || 20));
+  state.settings.dailyTargets[activeCourse()] = state.settings.dailyTarget;
   state.settings.targetIsManual = manual;
   state.settings.targetManualDate = manual ? localDateKey() : null;
   todayRecord().target = state.settings.dailyTarget;
@@ -4392,7 +4517,13 @@ async function sendAIMessage(event) {
 }
 
 function learningDates() {
-  return Object.entries(state.daily).filter(([, value]) => (value.focusSeconds || 0) > 0 || (value.learned || 0) > 0 || (value.screened || 0) > 0).map(([date]) => date).sort();
+  return Object.entries(state.daily)
+    .filter(([, value]) => {
+      const record = courseDailyRecord(value, activeCourse(), false);
+      return record && ((record.focusSeconds || 0) > 0 || (record.learned || 0) > 0 || (record.screened || 0) > 0);
+    })
+    .map(([date]) => date)
+    .sort();
 }
 
 function calculateStreak() {
@@ -4421,7 +4552,8 @@ function renderProgress() {
     const date = new Date();
     date.setDate(date.getDate() - offset);
     const key = localDateKey(date);
-    days.push({ key, label: ["日", "一", "二", "三", "四", "五", "六"][date.getDay()], minutes: Math.round((state.daily[key]?.focusSeconds || 0) / 60) });
+    const record = courseDailyRecord(state.daily[key], activeCourse(), false);
+    days.push({ key, label: ["日", "一", "二", "三", "四", "五", "六"][date.getDay()], minutes: Math.round((record?.focusSeconds || 0) / 60) });
   }
   const maxMinutes = Math.max(30, ...days.map((day) => day.minutes));
   $("#weekMinutes").textContent = `${days.reduce((total, day) => total + day.minutes, 0)} 分钟`;
@@ -4449,9 +4581,8 @@ function wordLibraryFilteredWords() {
     const statusMatch = wordLibraryState.status === "all"
       || (wordLibraryState.status === "learned" ? Boolean(item?.learnedAt) : status === wordLibraryState.status);
     if (!statusMatch) return false;
-    const isCET6 = Boolean(word.isCET6Supplement || word.level === "CET6");
-    if (wordLibraryState.level === "cet4" && isCET6) return false;
-    if (wordLibraryState.level === "cet6" && !isCET6) return false;
+    if (wordLibraryState.level === "cet6" && word.level !== "CET6") return false;
+    if (wordLibraryState.level === "postgrad" && word.level !== "POSTGRAD" && !word.isPostgradExtension) return false;
     if (!query) return true;
     const searchable = [word.word, word.phonetic, word.translation, word.brief, word.phrase, word.phraseMeaning]
       .filter(Boolean).join(" ").toLowerCase();
@@ -4536,6 +4667,7 @@ function renderWordLibrary() {
   const counts = stateCounts();
   const learned = words.filter((word) => Boolean(state.wordStates[word.word]?.learnedAt)).length;
   $("#wordLibraryTotal").textContent = number.format(words.length);
+  $("#wordLibraryOrderHint").textContent = activeCourse() === "cet6" ? "六级核心优先，其后为考研英语扩展" : "按四级考频顺序排列";
   const summaries = [
     ["全部", words.length, "all"],
     ["已背过", learned, "learned"],
@@ -4567,14 +4699,15 @@ function renderWordLibrary() {
     const status = wordLibraryStatus(word);
     const senses = wordSenseRows(word).slice(0, 2);
     const meaning = senses.map((sense) => `${sense.partOfSpeech || ""} ${sense.meaning}`.trim()).join("；");
-    const isCET6 = Boolean(word.isCET6Supplement || word.level === "CET6");
+    const levelLabel = wordLevelLabel(word);
+    const isAdvanced = levelLabel !== "四级";
     const reviewed = shortLearningDate(item?.lastReviewedAt || item?.learnedAt);
     const learningMeta = item?.learnedAt ? `已背过${reviewed ? ` · 最近 ${reviewed}` : ""}` : item?.status ? "词测已判断" : "尚未开始";
     return `<article class="word-library-row">
       <span class="word-library-number">${number.format(start + offset + 1)}</span>
       <button class="word-library-word" type="button" data-word-list-open="${escapeHtml(word.word)}" aria-label="查看 ${escapeHtml(word.word)} 的详情与跟读纠音"><strong>${escapeHtml(word.word)}</strong>${word.phonetic ? `<span>/${escapeHtml(String(word.phonetic).replace(/^\/?|\/?$/g, ""))}/</span>` : ""}</button>
       <p class="word-library-meaning">${escapeHtml(meaning || word.translation || "暂无释义")}</p>
-      <div class="word-library-meta"><span class="word-level-chip ${isCET6 ? "cet6" : ""}">${isCET6 ? "六级补充" : "四级"}</span><span class="word-status-chip ${status}">${statusLabels[status]}</span><small>${escapeHtml(learningMeta)}</small></div>
+      <div class="word-library-meta"><span class="word-level-chip ${isAdvanced ? "cet6" : ""}">${levelLabel}</span><span class="word-status-chip ${status}">${statusLabels[status]}</span><small>${escapeHtml(learningMeta)}</small></div>
       <button class="word-library-speak" type="button" data-word-list-speak="${escapeHtml(word.word)}" aria-label="朗读 ${escapeHtml(word.word)}"><span class="word-library-speak-glyph" aria-hidden="true">▶</span></button>
     </article>`;
   }).join("") : `<div class="word-library-empty"><strong>没有找到符合条件的单词</strong><p>换个关键词，或选择“全部”再试试。</p></div>`;
@@ -4740,7 +4873,9 @@ async function importDataFile(file) {
     if (!nextState.settings || !nextState.wordStates) throw new Error("invalid backup");
     if (!window.confirm("导入会替换当前学习记录。系统会先保留一份可恢复副本，确认继续吗？")) return;
     localStorage.setItem(`${STORAGE_KEY}-recovery`, JSON.stringify(state));
-    state = { ...defaultState(), ...nextState, settings: { ...defaultState().settings, ...nextState.settings } };
+    state = normalizeState(nextState);
+    activateCourseWords();
+    initializeWordInsightIndex();
     saveState();
     applyTheme();
     applyRecommendedTarget();
@@ -4756,7 +4891,9 @@ function restoreRecovery() {
     const recovery = JSON.parse(localStorage.getItem(`${STORAGE_KEY}-recovery`));
     if (!recovery?.settings || !recovery?.wordStates) throw new Error("missing recovery");
     const current = JSON.stringify(state);
-    state = { ...defaultState(), ...recovery, settings: { ...defaultState().settings, ...recovery.settings } };
+    state = normalizeState(recovery);
+    activateCourseWords();
+    initializeWordInsightIndex();
     localStorage.setItem(`${STORAGE_KEY}-recovery`, current);
     saveState();
     applyTheme();
@@ -4775,6 +4912,7 @@ function checkBackupReminder() {
 }
 
 function bindEvents() {
+  $$('[data-course-select]').forEach((select) => select.addEventListener("change", (event) => switchCourse(event.target.value)));
   $$("[data-view-target]").forEach((button) => button.addEventListener("click", () => {
     if (currentView === "ai" && button.dataset.viewTarget !== "ai") {
       if (isVoiceActive()) stopVoiceImmediately();
@@ -5012,6 +5150,8 @@ function bindEvents() {
   window.addEventListener("storage", (event) => {
     if (event.key !== STORAGE_KEY || !event.newValue) return;
     state = loadState();
+    activateCourseWords();
+    initializeWordInsightIndex();
     renderAll();
     toast("存档已同步", "检测到同一网址下的其他页面更新了学习记录。" );
   });
@@ -5043,14 +5183,16 @@ function registerWebMCP() {
 
   register({
     name: "get_today_plan",
-    title: "读取今日四级计划",
-    description: "读取今天的新词目标、完成量、到期复习量、筛查进度和考试倒计时，不修改学习数据。",
+    title: "读取今日课程计划",
+    description: "读取当前课程今天的新词目标、完成量、到期复习量、筛查进度和考试倒计时，不修改学习数据。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, untrustedContentHint: false },
     execute() {
       const record = todayRecord();
       return {
         date: localDateKey(),
+        course: activeCourse(),
+        courseLabel: courseLabel(),
         daysUntilExam: daysUntilExam(),
         newWordTarget: state.settings.dailyTarget,
         newWordsLearned: record.learned,
@@ -5110,7 +5252,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=52", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=54", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

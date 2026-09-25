@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=52" />
+    <link rel="stylesheet" href="./styles.css?v=54" />
   </head>
   <body>
     <div class="app-shell">
@@ -27,8 +27,16 @@
               <path d="M25 31h14l3 22H22l3-22Z" />
             </svg>
           </span>
-          <span><strong>蘑菇酱</strong><small>CET-4</small></span>
+          <span><strong>蘑菇酱</strong><small data-course-label>CET-4</small></span>
         </button>
+
+        <label class="course-switcher">
+          <span>学习课程</span>
+          <select data-course-select aria-label="切换学习课程">
+            <option value="cet4">英语四级</option>
+            <option value="cet6">六级・考研英语</option>
+          </select>
+        </label>
 
         <nav class="nav-list">
           <button class="nav-item active" type="button" data-view-target="today" aria-current="page">
@@ -69,9 +77,9 @@
             <span class="brand-mark" aria-hidden="true">
               <svg viewBox="0 0 64 64"><path d="M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z"/><path d="M25 31h14l3 22H22l3-22Z"/></svg>
             </span>
-            <span><strong>蘑菇酱四级</strong></span>
+            <span><strong>蘑菇酱</strong></span>
           </button>
-          <span class="mobile-countdown"><strong data-countdown>—</strong> 天</span>
+          <select class="mobile-course-select" data-course-select aria-label="切换学习课程"><option value="cet4">四级</option><option value="cet6">六级・考研</option></select>
         </header>
 
         <section class="view active" id="view-today" data-view="today">
@@ -205,7 +213,7 @@
           <article class="card word-library-card">
             <div class="word-library-toolbar">
               <label class="word-library-search"><span class="sr-only">搜索单词或中文释义</span><input id="wordLibrarySearch" type="search" autocomplete="off" placeholder="搜索单词、音标或中文释义…"/></label>
-              <label class="word-library-level"><span class="sr-only">词库范围</span><select id="wordLibraryLevel"><option value="all">全部词库</option><option value="cet4">四级主词</option><option value="cet6">六级补充</option></select></label>
+              <label class="word-library-level"><span class="sr-only">词库范围</span><select id="wordLibraryLevel"><option value="all">当前课程全部词汇</option></select></label>
             </div>
             <div class="word-library-filters" id="wordLibraryFilters" aria-label="按学习状态筛选">
               <button class="active" type="button" data-word-filter="all">全部</button>
@@ -215,7 +223,7 @@
               <button type="button" data-word-filter="fuzzy">模糊</button>
               <button type="button" data-word-filter="unknown">不认识</button>
             </div>
-            <div class="word-library-result-head"><p id="wordLibraryResultCount">正在整理词库…</p><small>按四级考频顺序排列</small></div>
+            <div class="word-library-result-head"><p id="wordLibraryResultCount">正在整理词库…</p><small id="wordLibraryOrderHint">按四级考频顺序排列</small></div>
             <div class="word-library-list" id="wordLibraryList" aria-live="polite"></div>
             <div class="word-library-pagination">
               <button class="button ghost small" type="button" id="wordLibraryPrev">上一页</button>
@@ -451,7 +459,7 @@
 
             <section class="card settings-section wide about-section">
               <div><p class="card-kicker">ABOUT</p><h2>内容与许可</h2></div>
-              <p>当前主背词库共 4,578 词：排除 569 个小学基础词与基础语法词后保留 3,454 个四级词，并按考试词频补充 1,124 个六级词。六级词会在学习卡片上明确标注。范围与词频来自 CETVocabulary，音标与释义补充来自 ECDICT。</p>
+              <p>四级与高级课程分开学习：四级课程 3,454 词；高级课程含 1,249 个六级核心词和 1,051 个中国考研英语高频扩展词，共 2,300 词。考研扩展会明确标注，不会冒充六级大纲词。范围与词频来自 CETVocabulary，音标、释义和考研标签补充来自 ECDICT。</p>
               <div class="source-links"><a href="https://github.com/exam-data/CETVocabulary" target="_blank" rel="noreferrer">CETVocabulary ↗</a><a href="https://github.com/kajweb/dict" target="_blank" rel="noreferrer">小学词表来源 ↗</a><a href="https://github.com/skywind3000/ECDICT" target="_blank" rel="noreferrer">ECDICT ↗</a><a href="https://learningenglish.voanews.com/p/6861.html" target="_blank" rel="noreferrer">VOA 使用说明 ↗</a></div>
             </section>
           </div>
@@ -506,6 +514,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=52" defer></script>
+    <script src="./app.js?v=54" defer></script>
   </body>
 </html>

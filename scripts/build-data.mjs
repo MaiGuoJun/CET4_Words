@@ -12,7 +12,7 @@ const sourceDir = process.env.CET_SOURCE_DIR
 const cetPath = path.join(sourceDir, "cet_full_list.json");
 const ecdictPath = path.join(sourceDir, "ecdict.csv");
 const outputPath = path.join(projectDir, "dist", "data", "words.json");
-const TARGET_WORD_COUNT = 4578;
+const ADVANCED_COURSE_WORD_COUNT = 2300;
 const PRIMARY_BOOK_PATTERN = /^PEPXiaoXue[3-6]_[12]\.json$/;
 const elementaryGrammarWords = new Set(`
   the a an to of and or but if so as than
@@ -309,6 +309,12 @@ const coreSenseSupplements = new Map(Object.entries({
   test: [["v.", "测试；检验"]],
   future: [["adj.", "未来的；将来的"]],
   care: [["n.", "关心；照料；小心"]],
+  minute: [["n.", "分钟；分；片刻"]],
+  patient: [["adj.", "有耐心的；耐心的"]],
+  current: [["adj.", "当前的；现行的"]],
+  medium: [["adj.", "中等的；中等大小的"]],
+  novel: [["adj.", "新颖的；新奇的"]],
+  relative: [["n.", "亲戚；亲属"]],
   plan: [["v.", "计划；打算"]],
   sense: [["v.", "感觉到；意识到"]],
   control: [["v.", "控制；管理"]],
@@ -349,10 +355,10 @@ const coreSenseSupplements = new Map(Object.entries({
   fail: [["v.", "破产；倒闭"]],
   item: [["n.", "物品；一件商品"]],
   project: [["n.", "项目"]],
-  claim: [["v.", "声称；宣称"]],
-  decline: [["v.", "拒绝；谢绝"]],
+  claim: [["v.", "索要；声称；宣称"]],
+  decline: [["v.", "拒绝；谢绝；下降"]],
   please: [["v.", "使愉快；使满意"]],
-  content: [["n.", "目录"]],
+  content: [["n.", "内容；含量；目录"]],
   gap: [["n.", "差距；分歧"]],
   figure: [["n.", "人物"]],
   fit: [["adj.", "健康的；合适的"]],
@@ -370,13 +376,13 @@ const coreSenseSupplements = new Map(Object.entries({
   prefer: [["v.", "偏爱；更喜欢"]],
   derive: [["v.", "取得；获得"]],
   intend: [["v.", "想要；打算"]],
-  grant: [["v.", "同意；准予"]],
+  grant: [["v.", "同意；授予；准予"]],
   establish: [["v.", "查实；证实"]],
   union: [["n.", "一致；联合"]],
   manner: [["n.", "方式；方法"]],
   truth: [["n.", "真相；事实"]],
   bit: [["n.", "一点；少量"]],
-  boost: [["v.", "增加；促进"]],
+  boost: [["v.", "往上推；增加；促进"]],
   communicate: [["v.", "交流；沟通"]],
   facility: [["n.", "天资；才能"]],
   generate: [["v.", "引起；产生"]],
@@ -387,7 +393,14 @@ const coreSenseSupplements = new Map(Object.entries({
   eliminate: [["v.", "淘汰；排除"]],
   cope: [["v.", "处理；应付"]],
   crowd: [["v.", "聚集；挤满"]],
-  contingent: [["n.", "代表团；一队人"]]
+  contingent: [["n.", "代表团；一队人"]],
+  accord: [["n.", "协议；一致"]],
+  gather: [["v.", "聚集；搜集"]],
+  guide: [["v.", "指引；指导"]],
+  lie: [["n.", "谎话；谎言"]],
+  peer: [["v.", "凝视；仔细看"]],
+  spot: [["v.", "发现；认出"]],
+  touch: [["v.", "触摸；感动；接触"]]
 }));
 
 const preferredPartOfSpeech = new Map(Object.entries({
@@ -398,13 +411,39 @@ const preferredPartOfSpeech = new Map(Object.entries({
   call: "v.",
   general: "adj.",
   medical: "adj.",
+  minute: "n.",
+  though: "conj.",
+  patient: "adj.",
+  current: "adj.",
+  content: "n.",
+  fit: "adj.",
+  grant: "v.",
+  gather: "v.",
+  medium: "adj.",
+  novel: "adj.",
+  relative: "n.",
+  household: "n.",
+  accord: "n.",
+  cause: "v.",
+  claim: "v.",
+  decline: "v.",
+  guide: "v.",
+  lie: "n.",
+  peer: "v.",
+  spot: "v.",
+  touch: "v.",
+  however: "adv.",
+  graduate: "v.",
+  release: "v.",
+  boost: "v.",
   contingent: "n."
 }));
 
 const blockedPartOfSpeech = new Map(Object.entries({
   sheet: ["v."],
   company: ["v."],
-  medical: ["n."]
+  medical: ["n."],
+  spot: ["adj."]
 }));
 
 const removedMeanings = new Map(Object.entries({
@@ -640,9 +679,10 @@ function buildRankedSenses(coreTranslation, dictionaryTranslation, fallbackPartO
   const primaryMeaningCount = rank <= 1200 ? 4 : rank <= 2600 ? 3 : 2;
   const secondaryMeaningCount = rank <= 1200 ? 3 : rank <= 2600 ? 2 : 1;
   return [...selected.values()]
-    .sort((left, right) => right.matchScore - left.matchScore
+    .sort((left, right) => left.firstIndex - right.firstIndex
+      || right.matchScore - left.matchScore
       || (usageWeights.get(right.group.partOfSpeech) || 0) - (usageWeights.get(left.group.partOfSpeech) || 0)
-      || left.firstIndex - right.firstIndex)
+      || dictionaryGroups.indexOf(left.group) - dictionaryGroups.indexOf(right.group))
     .slice(0, maxSenseCount)
     .map((entry, index) => {
       const meanings = [...entry.matchedMeanings];
@@ -690,6 +730,23 @@ function curateSenses(word, sourceSenses, rank) {
   }));
 }
 
+function dictionaryFrequencyRank(record) {
+  const ranks = [record.bnc, record.frq]
+    .map(Number)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return ranks.length ? Math.min(...ranks) : Number.MAX_SAFE_INTEGER;
+}
+
+function dictionaryBrief(record) {
+  const groups = parseDictionarySenses(record.translation);
+  const weights = parseCorpusPartOfSpeech(record.pos);
+  return [...groups]
+    .sort((left, right) => (weights.get(right.partOfSpeech) || 0) - (weights.get(left.partOfSpeech) || 0))
+    .flatMap((group) => group.meanings.slice(0, 2))
+    .slice(0, 3)
+    .join("、");
+}
+
 if (!fs.existsSync(cetPath) || !fs.existsSync(ecdictPath)) {
   throw new Error("Missing source data. Download CETVocabulary and ECDICT into work/sources first.");
 }
@@ -723,13 +780,13 @@ for (const row of cetRows) {
 const excludedPrimary = uniqueRows.filter((row) => !row["六级"] && primaryWords.has(row["单词"].toLocaleLowerCase("en-US")));
 const cet4 = uniqueRows.filter((row) => !row["六级"] && !primaryWords.has(row["单词"].toLocaleLowerCase("en-US")));
 const cet6Candidates = uniqueRows.filter((row) => row["六级"] && !primaryWords.has(row["单词"].toLocaleLowerCase("en-US")));
-const cet6Needed = TARGET_WORD_COUNT - cet4.length;
-if (cet6Needed < 0 || cet6Needed > cet6Candidates.length) {
-  throw new Error(`Cannot build ${TARGET_WORD_COUNT} words from ${cet4.length} CET-4 and ${cet6Candidates.length} CET-6 candidates`);
+if (cet6Candidates.length >= ADVANCED_COURSE_WORD_COUNT) {
+  throw new Error(`Advanced course target ${ADVANCED_COURSE_WORD_COUNT} must exceed the ${cet6Candidates.length} CET-6 words`);
 }
-const selectedRows = [...cet4, ...cet6Candidates.slice(0, cet6Needed)];
+const selectedRows = [...cet4, ...cet6Candidates];
 const target = new Map(selectedRows.map((row) => [row["单词"].toLocaleLowerCase("en-US"), row]));
 const supplements = new Map();
+const postgradCandidates = new Map();
 
 const stream = fs.createReadStream(ecdictPath, { encoding: "utf8" });
 const input = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -741,11 +798,31 @@ for await (const line of input) {
   }
   const values = parseCsvLine(line);
   const word = values[0]?.toLocaleLowerCase("en-US");
-  if (!target.has(word)) continue;
   const record = Object.fromEntries(headers.map((header, index) => [header, values[index] || ""]));
-  supplements.set(word, record);
-  if (supplements.size === target.size) break;
+  if (target.has(word)) supplements.set(word, record);
+  const tags = new Set(String(record.tag || "").toLocaleLowerCase("en-US").split(/\s+/).filter(Boolean));
+  if (
+    tags.has("ky")
+    && !sourceWords.has(word)
+    && !primaryWords.has(word)
+    && /^[a-z]+(?:-[a-z]+)?$/.test(word)
+    && record.translation
+    && parseDictionarySenses(record.translation).length
+  ) postgradCandidates.set(word, record);
 }
+
+const postgradNeeded = ADVANCED_COURSE_WORD_COUNT - cet6Candidates.length;
+const selectedPostgrad = [...postgradCandidates.values()]
+  .sort((left, right) => dictionaryFrequencyRank(left) - dictionaryFrequencyRank(right)
+    || Number(right.collins || 0) - Number(left.collins || 0)
+    || left.word.localeCompare(right.word, "en"))
+  .slice(0, postgradNeeded);
+if (selectedPostgrad.length !== postgradNeeded) {
+  throw new Error(`Expected ${postgradNeeded} postgraduate extension words, found ${selectedPostgrad.length}`);
+}
+
+const cet4CourseRanks = new Map(cet4.map((row, index) => [row["单词"].toLocaleLowerCase("en-US"), index + 1]));
+const cet6CourseRanks = new Map(cet6Candidates.map((row, index) => [row["单词"].toLocaleLowerCase("en-US"), index + 1]));
 
 const seen = new Set();
 const output = selectedRows.filter((row) => {
@@ -767,6 +844,8 @@ const output = selectedRows.filter((row) => {
     word: row["单词"],
     level: row["六级"] ? "CET6" : "CET4",
     isCET6Supplement: Boolean(row["六级"]),
+    course: row["六级"] ? "cet6" : "cet4",
+    courseRank: row["六级"] ? cet6CourseRanks.get(normalized) : cet4CourseRanks.get(normalized),
     phonetic: extra.phonetic || "",
     partOfSpeech: [...new Set(senses.map((sense) => sense.partOfSpeech))].join(" / "),
     translation: senses.map((sense) => sense.meaning).join("；"),
@@ -780,11 +859,43 @@ const output = selectedRows.filter((row) => {
   };
 });
 
+const maxSourceRank = Math.max(...uniqueRows.map((row) => Number(row["序号"]) || 0));
+selectedPostgrad.forEach((extra, index) => {
+  const normalized = extra.word.toLocaleLowerCase("en-US");
+  const courseRank = cet6Candidates.length + index + 1;
+  const coreTranslation = dictionaryBrief(extra);
+  const fallbackPartOfSpeech = extractPartsOfSpeech(extra.translation, extra.word);
+  const generatedSenses = buildRankedSenses(coreTranslation, extra.translation, fallbackPartOfSpeech, extra.pos, maxSourceRank + courseRank);
+  const senses = curateSenses(normalized, generatedSenses, maxSourceRank + courseRank);
+  const phraseList = phraseIndex.get(normalized) || [];
+  const primaryPhrase = phraseList[0];
+  output.push({
+    word: extra.word,
+    level: "POSTGRAD",
+    isCET6Supplement: false,
+    isPostgradExtension: true,
+    course: "cet6",
+    courseRank,
+    phonetic: extra.phonetic || "",
+    partOfSpeech: [...new Set(senses.map((sense) => sense.partOfSpeech))].join(" / "),
+    translation: senses.map((sense) => sense.meaning).join("；"),
+    senses,
+    brief: coreTranslation,
+    rank: maxSourceRank + courseRank,
+    frequency: Math.max(0, 100_000 - dictionaryFrequencyRank(extra)),
+    category: "考研扩展",
+    variant: "",
+    ...(primaryPhrase ? { phrase: primaryPhrase.text, phraseMeaning: primaryPhrase.meaning, phrases: phraseList } : {})
+  });
+});
+
 fs.writeFileSync(outputPath, `${JSON.stringify(output)}\n`, "utf8");
 console.log(JSON.stringify({
   total: output.length,
   cet4: output.filter((item) => item.level === "CET4").length,
-  cet6Supplement: output.filter((item) => item.level === "CET6").length,
+  cet6: output.filter((item) => item.level === "CET6").length,
+  postgradExtension: output.filter((item) => item.level === "POSTGRAD").length,
+  advancedCourse: output.filter((item) => item.course === "cet6").length,
   excludedPrimary: excludedPrimary.length,
   primarySourceWords: primaryWords.size,
   supplemented: supplements.size,
