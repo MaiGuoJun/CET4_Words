@@ -34,6 +34,7 @@ requireText(server, 'body.task === "writing"', "server writing review route");
 requireText(server, 'body.task === "translation-prompt"', "server translation prompt route");
 requireText(html, 'id="aiGenerateTranslation"', "AI translation prompt generator");
 requireText(app, "generateTranslationPrompt", "browser translation prompt flow");
+requireText(app, "between 135 and 155 Chinese Han characters", "CET4 translation prompt length guard");
 requireText(app, "comparePronunciationAudio", "acoustic pronunciation comparison");
 requireText(app, "scoreStandaloneRhythm", "no-TTS shadowing rhythm fallback");
 requireText(app, "基础跟读分", "basic shadowing score label");
@@ -56,6 +57,6 @@ requireText(html, 'class="word-pronunciation-practice"', "fixed word pronunciati
 requireText(app, "settleWithin(getPronunciationClip(text), 7000, null)", "mobile pronunciation timeout fallback");
 requireText(app, "中文提示：${primaryTestMeaning(currentWord)}", "audio quiz Chinese meaning hint");
 requireText(app, "const canTranslate = Boolean(latest?.translation)", "always-available voice translation control");
-requireText(html, "app.js?v=57", "v57 script cache bust");
+requireText(html, "app.js?v=58", "v58 script cache bust");
 
 console.log("AI contract smoke test passed");

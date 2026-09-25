@@ -397,7 +397,7 @@ async function handleAIChat(request, response) {
 
 Requirements:
 - Topic: ${topic}.
-- Write 4–6 connected Chinese sentences, roughly 130–180 Chinese characters in total.
+- Write 4–5 connected Chinese sentences and strictly keep the source between 135 and 155 Chinese Han characters, excluding punctuation. Aim for about 145 Han characters; do not approach 160 unless necessary.
 - Use concrete facts and clear logical connections. Include several CET-4-relevant structures such as time changes, comparison, cause/effect, passive meaning, relative clauses, or "越来越/不仅…而且…" ideas.
 - Keep names, figures and specialist terminology limited; any culture-specific term must be understandable from context.
 - Do not include English, a reference translation, vocabulary hints, answer keys, markdown, or explanations in the source paragraph.
