@@ -302,14 +302,20 @@ function parseTranslationPrompt(text) {
   const end = cleaned.lastIndexOf("}");
   try {
     const result = JSON.parse(start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned);
-    const source = String(result.source || "").trim().slice(0, 2000);
+    const payload = result?.result || result?.data || result?.question || result;
+    const source = String(payload?.source || payload?.paragraph || payload?.passage || payload?.chinese || payload?.中文原文 || payload?.题目 || "").trim().slice(0, 2000);
     if (!source || /[A-Za-z]{4,}/.test(source)) throw new Error("INVALID_TRANSLATION_PROMPT");
     return {
-      title: String(result.title || "四级段落翻译练习").trim().slice(0, 80),
+      title: String(payload?.title || payload?.标题 || "四级段落翻译练习").trim().slice(0, 80),
       source,
-      focus: Array.isArray(result.focus) ? result.focus.map((item) => String(item).trim().slice(0, 80)).filter(Boolean).slice(0, 3) : []
+      focus: Array.isArray(payload?.focus || payload?.考点) ? (payload.focus || payload.考点).map((item) => String(item).trim().slice(0, 80)).filter(Boolean).slice(0, 3) : []
     };
   } catch {
+    const plain = cleaned.replace(/^(?:题目|中文原文|段落)\s*[：:]\s*/i, "").trim();
+    const chineseCharacters = (plain.match(/[\u3400-\u9fff]/g) || []).length;
+    if (!cleaned.startsWith("{") && chineseCharacters >= 80 && !/[A-Za-z]{4,}/.test(plain)) {
+      return { title: "四级段落翻译练习", source: plain.slice(0, 2000), focus: [] };
+    }
     throw new Error("INVALID_TRANSLATION_PROMPT");
   }
 }
@@ -403,7 +409,7 @@ Return only valid JSON: {"title":"short Chinese title","source":"Chinese paragra
     try {
       let completion;
       if (ZHIPU_API_KEY) {
-        try { completion = await requestZhipu(messages, 1400); }
+        try { completion = await requestZhipu(messages, 4096); }
         catch (error) { failures.push(error); }
       }
       if (!completion) completion = await requestOllama(messages, 800);

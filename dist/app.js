@@ -4246,14 +4246,23 @@ Return only valid JSON: {"title":"short Chinese title","source":"Chinese paragra
 function parseTranslationPrompt(text) {
   const cleaned = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   try {
-    const parsed = JSON.parse(cleaned.slice(cleaned.indexOf("{"), cleaned.lastIndexOf("}") + 1));
-    const title = String(parsed.title || "四级段落翻译练习").trim().slice(0, 80);
-    const source = String(parsed.source || "").trim().slice(0, 2000);
-    const focus = Array.isArray(parsed.focus) ? parsed.focus.map((item) => String(item).trim()).filter(Boolean).slice(0, 3) : [];
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    const parsed = JSON.parse(start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned);
+    const payload = parsed?.result || parsed?.data || parsed?.question || parsed;
+    const title = String(payload?.title || payload?.标题 || "四级段落翻译练习").trim().slice(0, 80);
+    const source = String(payload?.source || payload?.paragraph || payload?.passage || payload?.chinese || payload?.中文原文 || payload?.题目 || "").trim().slice(0, 2000);
+    const rawFocus = payload?.focus || payload?.考点;
+    const focus = Array.isArray(rawFocus) ? rawFocus.map((item) => String(item).trim()).filter(Boolean).slice(0, 3) : [];
     if (!source || /[A-Za-z]{4,}/.test(source)) throw new Error("INVALID_TRANSLATION_PROMPT");
     return { title, source, focus };
   } catch {
-    throw new Error("AI 返回的中文题目格式不完整，请再生成一次。");
+    const plain = cleaned.replace(/^(?:题目|中文原文|段落)\s*[：:]\s*/i, "").trim();
+    const chineseCharacters = (plain.match(/[\u3400-\u9fff]/g) || []).length;
+    if (!cleaned.startsWith("{") && chineseCharacters >= 80 && !/[A-Za-z]{4,}/.test(plain)) {
+      return { title: "四级段落翻译练习", source: plain.slice(0, 2000), focus: [] };
+    }
+    throw new Error("AI 返回的中文题目不完整，请再生成一次。");
   }
 }
 
@@ -4270,7 +4279,7 @@ async function requestDirectTranslationPrompt(topic) {
       response_format: { type: "json_object" },
       temperature: 0.95,
       top_p: 0.95,
-      max_tokens: 1400
+      max_tokens: 4096
     })
   });
   const data = await response.json().catch(() => ({}));
@@ -5355,7 +5364,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=56", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=57", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
