@@ -296,6 +296,24 @@ function parseWritingReview(text) {
   }
 }
 
+function parseTranslationPrompt(text) {
+  const cleaned = String(text || "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  try {
+    const result = JSON.parse(start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned);
+    const source = String(result.source || "").trim().slice(0, 2000);
+    if (!source || /[A-Za-z]{4,}/.test(source)) throw new Error("INVALID_TRANSLATION_PROMPT");
+    return {
+      title: String(result.title || "四级段落翻译练习").trim().slice(0, 80),
+      source,
+      focus: Array.isArray(result.focus) ? result.focus.map((item) => String(item).trim().slice(0, 80)).filter(Boolean).slice(0, 3) : []
+    };
+  } catch {
+    throw new Error("INVALID_TRANSLATION_PROMPT");
+  }
+}
+
 async function requestZhipu(messages, maxTokens = 2048) {
   const upstream = await fetch(`${ZHIPU_BASE_URL}/chat/completions`, {
     method: "POST",
@@ -358,6 +376,44 @@ async function handleAIChat(request, response) {
     body = await readJsonBody(request);
   } catch (error) {
     return json(response, error.message === "PAYLOAD_TOO_LARGE" ? 413 : 400, { error: "对话内容格式不正确或过长。" });
+  }
+
+  if (body.task === "translation-prompt") {
+    const topics = {
+      random: "中国文化、社会生活、科技教育或绿色发展中随机选择",
+      culture: "中国文化、传统习俗、非物质文化遗产或地方文化",
+      society: "中国社会生活、公共服务、青年成长或生活方式变化",
+      technology: "中国科技发展、数字生活、教育创新或青年学习",
+      ecology: "中国绿色发展、生态保护、低碳生活或城乡环境改善"
+    };
+    const topic = topics[body.topic] || topics.random;
+    const instructions = `You create original practice questions for the Chinese College English Test Band 4 (CET-4). Generate one Chinese-to-English paragraph translation exercise for a learner aiming for 500+. The official task is a 30-minute Chinese-to-English paragraph translation worth 15% of CET-4; imitate its practical difficulty and discourse style, but never copy, paraphrase closely, or claim to be an actual past-paper question.
+
+Requirements:
+- Topic: ${topic}.
+- Write 4–6 connected Chinese sentences, roughly 130–180 Chinese characters in total.
+- Use concrete facts and clear logical connections. Include several CET-4-relevant structures such as time changes, comparison, cause/effect, passive meaning, relative clauses, or "越来越/不仅…而且…" ideas.
+- Keep names, figures and specialist terminology limited; any culture-specific term must be understandable from context.
+- Do not include English, a reference translation, vocabulary hints, answer keys, markdown, or explanations in the source paragraph.
+- Make the passage challenging but realistically translatable with CET-4 vocabulary and grammar.
+
+Return only valid JSON: {"title":"short Chinese title","source":"Chinese paragraph only","focus":["three concise Chinese skill points"]}.`;
+    const messages = [{ role: "system", content: instructions }, { role: "user", content: "请生成一道新的练习题。" }];
+    const failures = [];
+    try {
+      let completion;
+      if (ZHIPU_API_KEY) {
+        try { completion = await requestZhipu(messages, 1400); }
+        catch (error) { failures.push(error); }
+      }
+      if (!completion) completion = await requestOllama(messages, 800);
+      const result = parseTranslationPrompt(completion.content);
+      return json(response, 200, { ...result, provider: completion.provider, model: completion.model });
+    } catch (error) {
+      failures.push(error);
+      console.error("Translation prompt generation failed:", failures.map((item) => item.message).join(", "));
+      return json(response, 502, { error: "AI 暂时没有生成题目，请稍后重试。" });
+    }
   }
 
   if (body.task === "writing") {

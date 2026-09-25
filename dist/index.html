@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=55" />
+    <link rel="stylesheet" href="./styles.css?v=56" />
   </head>
   <body>
     <div class="app-shell">
@@ -360,6 +360,11 @@
               <div class="ai-writing-panel" id="aiWritingPanel" hidden>
                 <div class="writing-form-grid">
                   <label class="field"><span>批改类型</span><select id="aiWritingType"><option value="essay">四级作文</option><option value="translation">四级段落翻译</option></select></label>
+                  <div class="translation-generator" id="aiTranslationGenerator" hidden>
+                    <div><strong>AI 真题风格出题</strong><small>只生成中文题目；参考译文会在你提交后出现。</small></div>
+                    <label class="field compact"><span>主题</span><select id="aiTranslationTopic"><option value="random">随机真题主题</option><option value="culture">中国文化</option><option value="society">社会生活</option><option value="technology">科技与教育</option><option value="ecology">绿色发展</option></select></label>
+                    <button class="button secondary" type="button" id="aiGenerateTranslation">生成中文题目</button>
+                  </div>
                   <label class="field"><span id="aiWritingPromptLabel">作文题目（可选）</span><textarea id="aiWritingPrompt" rows="3" maxlength="2000" placeholder="粘贴题目或写作要求，有题目时评分会更准确。"></textarea></label>
                   <label class="field"><span id="aiWritingInputLabel">你的英文作文</span><textarea id="aiWritingInput" rows="10" maxlength="6000" placeholder="粘贴你的英文作文…"></textarea></label>
                 </div>
@@ -514,6 +519,6 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=54" defer></script>
+    <script src="./app.js?v=56" defer></script>
   </body>
 </html>

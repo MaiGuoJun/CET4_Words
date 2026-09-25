@@ -207,6 +207,7 @@ let pronunciationAudioContext = null;
 let pronunciationAudioSource = null;
 let activeWordLibrarySpeakButton = null;
 let aiPending = false;
+let translationPromptPending = false;
 let aiServiceStatus = "checking";
 let aiServiceInfo = null;
 let aiBackendAvailable = false;
@@ -4219,6 +4220,104 @@ function parseWritingReview(text) {
   }
 }
 
+const TRANSLATION_TOPIC_LABELS = {
+  random: "中国文化、社会生活、科技教育或绿色发展中随机选择",
+  culture: "中国文化、传统习俗、非物质文化遗产或地方文化",
+  society: "中国社会生活、公共服务、青年成长或生活方式变化",
+  technology: "中国科技发展、数字生活、教育创新或青年学习",
+  ecology: "中国绿色发展、生态保护、低碳生活或城乡环境改善"
+};
+
+function buildTranslationPromptInstructions(topic) {
+  const topicLabel = TRANSLATION_TOPIC_LABELS[topic] || TRANSLATION_TOPIC_LABELS.random;
+  return `You create original practice questions for the Chinese College English Test Band 4 (CET-4). Generate one Chinese-to-English paragraph translation exercise for a learner aiming for 500+. The official task is a 30-minute Chinese-to-English paragraph translation worth 15% of CET-4; imitate its practical difficulty and discourse style, but never copy, paraphrase closely, or claim to be an actual past-paper question.
+
+Requirements:
+- Topic: ${topicLabel}.
+- Write 4–6 connected Chinese sentences, roughly 130–180 Chinese characters in total.
+- Use concrete facts and clear logical connections. Include several CET-4-relevant structures such as time changes, comparison, cause/effect, passive meaning, relative clauses, or "越来越/不仅…而且…" ideas.
+- Keep names, figures and specialist terminology limited; any culture-specific term must be understandable from context.
+- Do not include English, a reference translation, vocabulary hints, answer keys, markdown, or explanations in the source paragraph.
+- Make the passage challenging but realistically translatable with CET-4 vocabulary and grammar.
+
+Return only valid JSON: {"title":"short Chinese title","source":"Chinese paragraph only","focus":["three concise Chinese skill points"]}.`;
+}
+
+function parseTranslationPrompt(text) {
+  const cleaned = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    const parsed = JSON.parse(cleaned.slice(cleaned.indexOf("{"), cleaned.lastIndexOf("}") + 1));
+    const title = String(parsed.title || "四级段落翻译练习").trim().slice(0, 80);
+    const source = String(parsed.source || "").trim().slice(0, 2000);
+    const focus = Array.isArray(parsed.focus) ? parsed.focus.map((item) => String(item).trim()).filter(Boolean).slice(0, 3) : [];
+    if (!source || /[A-Za-z]{4,}/.test(source)) throw new Error("INVALID_TRANSLATION_PROMPT");
+    return { title, source, focus };
+  } catch {
+    throw new Error("AI 返回的中文题目格式不完整，请再生成一次。");
+  }
+}
+
+async function requestDirectTranslationPrompt(topic) {
+  if (!deviceAIConfig.apiKey) throw new Error("请先在设置中保存智谱 API Key。");
+  const response = await fetch(ZHIPU_CHAT_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${deviceAIConfig.apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: deviceAIConfig.model,
+      messages: [{ role: "system", content: buildTranslationPromptInstructions(topic) }, { role: "user", content: "请生成一道新的练习题。" }],
+      stream: false,
+      thinking: { type: "enabled", clear_thinking: false },
+      response_format: { type: "json_object" },
+      temperature: 0.95,
+      top_p: 0.95,
+      max_tokens: 1400
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error?.message || `智谱出题失败（${response.status}）。`);
+  const raw = data?.choices?.[0]?.message?.content;
+  const content = Array.isArray(raw) ? raw.map((item) => typeof item === "string" ? item : String(item?.text || item?.content || "")).join("") : raw;
+  return { ...parseTranslationPrompt(content), provider: "zhipu", model: String(data?.model || deviceAIConfig.model), transport: "direct" };
+}
+
+async function requestTranslationPrompt(topic) {
+  let backendError = null;
+  if (aiBackendAvailable) {
+    try {
+      const response = await fetch("./api/ai-chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task: "translation-prompt", topic }) });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "AI 出题失败，请稍后重试。");
+      return result;
+    } catch (error) { backendError = error; }
+  }
+  if (deviceAIConfig.apiKey) return requestDirectTranslationPrompt(topic);
+  throw backendError || new Error("请先在设置中配置手机 AI，或在电脑上启动本机服务。");
+}
+
+async function generateTranslationPrompt() {
+  if (translationPromptPending || aiPending) return;
+  translationPromptPending = true;
+  updateWritingLabels();
+  $("#aiWritingStatus").textContent = "AI 正在生成一道原创四级真题风格中文段落…";
+  try {
+    const topic = $("#aiTranslationTopic").value || "random";
+    const result = await requestTranslationPrompt(topic);
+    if (result.provider) aiServiceInfo = { provider: result.provider, model: result.model || "", transport: result.transport || "backend" };
+    $("#aiWritingPrompt").value = String(result.source || "").trim();
+    $("#aiWritingInput").value = "";
+    $("#aiWritingResult").hidden = true;
+    const focus = Array.isArray(result.focus) && result.focus.length ? `；考点：${result.focus.join("、")}` : "";
+    $("#aiWritingStatus").textContent = `已生成《${result.title || "四级段落翻译练习"}》${focus}。请在下方完成英文译文。`;
+    toast("四级翻译题已生成", "这里只显示中文；提交后再查看修改稿和参考表达。");
+  } catch (error) {
+    $("#aiWritingStatus").textContent = error.message || "AI 出题失败，请稍后再试。";
+    toast("AI 出题没有完成", $("#aiWritingStatus").textContent);
+  } finally {
+    translationPromptPending = false;
+    updateWritingLabels();
+  }
+}
+
 async function requestDirectWritingReview({ type, prompt, text }) {
   if (!deviceAIConfig.apiKey) throw new Error("请先在设置中保存智谱 API Key。" );
   const response = await fetch(ZHIPU_CHAT_URL, {
@@ -4288,6 +4387,9 @@ async function submitWritingReview() {
 
 function updateWritingLabels() {
   const translation = $("#aiWritingType").value === "translation";
+  $("#aiTranslationGenerator").hidden = !translation;
+  $("#aiGenerateTranslation").disabled = translationPromptPending || aiPending;
+  $("#aiGenerateTranslation").textContent = translationPromptPending ? "正在生成…" : "生成中文题目";
   $("#aiWritingPromptLabel").textContent = translation ? "中文原文（必填）" : "作文题目（可选）";
   $("#aiWritingInputLabel").textContent = translation ? "你的英文译文" : "你的英文作文";
   $("#aiWritingPrompt").placeholder = translation ? "粘贴需要翻译的中文段落。" : "粘贴题目或写作要求，有题目时评分会更准确。";
@@ -5066,6 +5168,7 @@ function bindEvents() {
   $("#aiVoiceToggle").addEventListener("click", toggleVoiceConversation);
   $("#aiVoiceEnd").addEventListener("click", finishVoiceConversation);
   $("#aiWritingType").addEventListener("change", updateWritingLabels);
+  $("#aiGenerateTranslation").addEventListener("click", () => { void generateTranslationPrompt(); });
   $("#aiWritingSubmit").addEventListener("click", () => { void submitWritingReview(); });
   $("#aiForm").addEventListener("submit", sendAIMessage);
   $("#aiInput").addEventListener("keydown", (event) => {
@@ -5252,7 +5355,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=54", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=56", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);
