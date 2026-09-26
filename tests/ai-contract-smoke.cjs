@@ -83,7 +83,7 @@ requireText(worker, 'url.pathname === "/voice-session"', "short-lived Doubao voi
 requireText(worker, 'url.pathname === "/doubao-realtime"', "Doubao WebSocket gateway");
 requireText(worker, 'headers["X-Api-Key"] = apiKey', "new Doubao API key authentication");
 requireText(worker, '"X-Api-Access-Key"', "server-side Doubao credentials");
-requireText(html, "doubao-realtime.js?v=61", "v61 Doubao client cache bust");
-requireText(html, "app.js?v=61", "v61 script cache bust");
+requireText(html, "doubao-realtime.js?v=62", "v62 Doubao client cache bust");
+requireText(html, "app.js?v=62", "v62 script cache bust");
 
 console.log("AI contract smoke test passed");

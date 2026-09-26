@@ -136,7 +136,8 @@ async function issueVoiceSession(request, env) {
     console.error("Doubao voice preflight rejected", JSON.stringify({ requestId: probe.requestId, status: probe.status, detail: probe.detail }));
     return json(request, env, 502, {
       error: doubaoHandshakeError(probe.status),
-      requestId: probe.requestId
+      requestId: probe.requestId,
+      detail: safeDoubaoDetail(probe.detail)
     });
   }
   try { probe.upstream.webSocket.close(1000, "preflight-complete"); } catch {}
@@ -154,9 +155,17 @@ async function issueVoiceSession(request, env) {
 
 function doubaoHandshakeError(status) {
   if (status === 401) return "豆包 API Key 无效或已失效（401）";
-  if (status === 403) return "豆包 API Key 没有开通端到端实时语音权限（403）";
+  if (status === 403) return "豆包实时语音鉴权被拒绝（403）";
   if (status === 429) return "豆包实时语音额度或并发已达到上限（429）";
   return `豆包实时语音握手被拒绝（${status || "网络错误"}）`;
+}
+
+function safeDoubaoDetail(detail) {
+  const text = String(detail || "").trim();
+  if (!text) return "";
+  return text
+    .replace(/(api[-_ ]?key|access[-_ ]?key|token)(["'\s:=]+)[^\s,"'}]+/gi, "$1$2[已隐藏]")
+    .slice(0, 500);
 }
 
 async function openDoubaoRealtime(env) {
@@ -194,7 +203,11 @@ async function proxyDoubaoRealtime(request, env, url) {
   const connection = await openDoubaoRealtime(env);
   if (!connection.upstream?.webSocket) {
     console.error("Doubao WebSocket handshake rejected", JSON.stringify({ requestId: connection.requestId, status: connection.status, detail: connection.detail }));
-    return json(request, env, 502, { error: doubaoHandshakeError(connection.status), requestId: connection.requestId });
+    return json(request, env, 502, {
+      error: doubaoHandshakeError(connection.status),
+      requestId: connection.requestId,
+      detail: safeDoubaoDetail(connection.detail)
+    });
   }
   return connection.upstream;
 }

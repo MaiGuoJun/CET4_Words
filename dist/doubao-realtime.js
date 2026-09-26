@@ -155,7 +155,10 @@
         body: JSON.stringify({ purpose: "dialogue" })
       });
       const session = await response.json().catch(() => ({}));
-      if (!response.ok || !session.websocketUrl) throw new Error(session.error || "无法创建豆包语音连接");
+      if (!response.ok || !session.websocketUrl) {
+        const detail = String(session.detail || "").trim();
+        throw new Error([session.error || "无法创建豆包语音连接", detail].filter(Boolean).join("："));
+      }
       this.socket = new WebSocket(session.websocketUrl);
       this.socket.binaryType = "arraybuffer";
       await new Promise((resolve, reject) => {
