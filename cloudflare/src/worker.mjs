@@ -124,7 +124,9 @@ async function validVoiceTicket(ticket, env) {
 }
 
 function doubaoConfigured(env) {
-  return Boolean(String(env.DOUBAO_APP_ID || "").trim() && String(env.DOUBAO_ACCESS_TOKEN || "").trim());
+  const apiKey = String(env.DOUBAO_API_KEY || "").trim();
+  const legacy = String(env.DOUBAO_APP_ID || "").trim() && String(env.DOUBAO_ACCESS_TOKEN || "").trim();
+  return Boolean(apiKey || legacy);
 }
 
 async function issueVoiceSession(request, env) {
@@ -149,16 +151,19 @@ async function proxyDoubaoRealtime(request, env, url) {
   if (!await validVoiceTicket(url.searchParams.get("ticket"), env)) {
     return json(request, env, 401, { error: "语音连接票据无效或已过期" });
   }
-  const upstream = await fetch(DOUBAO_DIALOGUE_URL, {
-    headers: {
-      Upgrade: "websocket",
-      "X-Api-App-ID": String(env.DOUBAO_APP_ID).trim(),
-      "X-Api-Access-Key": String(env.DOUBAO_ACCESS_TOKEN).trim(),
-      "X-Api-Resource-Id": DOUBAO_RESOURCE_ID,
-      "X-Api-App-Key": DOUBAO_APP_KEY,
-      "X-Api-Connect-Id": crypto.randomUUID()
-    }
-  });
+  const apiKey = String(env.DOUBAO_API_KEY || "").trim();
+  const headers = {
+    Upgrade: "websocket",
+    "X-Api-Resource-Id": DOUBAO_RESOURCE_ID,
+    "X-Api-Connect-Id": crypto.randomUUID()
+  };
+  if (apiKey) headers["X-Api-Key"] = apiKey;
+  else {
+    headers["X-Api-App-ID"] = String(env.DOUBAO_APP_ID).trim();
+    headers["X-Api-Access-Key"] = String(env.DOUBAO_ACCESS_TOKEN).trim();
+    headers["X-Api-App-Key"] = DOUBAO_APP_KEY;
+  }
+  const upstream = await fetch(DOUBAO_DIALOGUE_URL, { headers });
   if (!upstream.webSocket) return json(request, env, 502, { error: "豆包实时语音连接失败" });
   return upstream;
 }

@@ -79,6 +79,7 @@ requireText(doubao, "downsampleToPcm16", "16 kHz PCM microphone stream");
 requireText(doubao, "EVENTS.TTS_RESPONSE", "streaming Doubao audio playback");
 requireText(worker, 'url.pathname === "/voice-session"', "short-lived Doubao voice ticket");
 requireText(worker, 'url.pathname === "/doubao-realtime"', "Doubao WebSocket gateway");
+requireText(worker, 'headers["X-Api-Key"] = apiKey', "new Doubao API key authentication");
 requireText(worker, '"X-Api-Access-Key"', "server-side Doubao credentials");
 requireText(html, "doubao-realtime.js?v=60", "v60 Doubao client cache bust");
 requireText(html, "app.js?v=60", "v60 script cache bust");

@@ -90,12 +90,11 @@ npx wrangler d1 create mogu-cet4-sync
 ```powershell
 npx wrangler d1 execute mogu-cet4-sync --remote --file schema.sql
 npx wrangler secret put SYNC_SECRET
-npx wrangler secret put DOUBAO_APP_ID
-npx wrangler secret put DOUBAO_ACCESS_TOKEN
+npx wrangler secret put DOUBAO_API_KEY
 npx wrangler deploy
 ```
 
-`DOUBAO_APP_ID` 和 `DOUBAO_ACCESS_TOKEN` 来自火山引擎豆包语音控制台中已开通的“端到端实时语音大模型”应用。两项都应作为 Worker Secret 填写，不要粘贴到网页、源代码或聊天中。只配置 `SYNC_SECRET` 时，学习同步仍正常，语音对话会自动使用原有智谱/浏览器方案。
+`DOUBAO_API_KEY` 来自新版火山引擎豆包语音控制台，应作为 Worker Secret 填写，不要粘贴到网页、源代码或聊天中。网关也兼容旧版控制台的 `DOUBAO_APP_ID` + `DOUBAO_ACCESS_TOKEN`，但两套鉴权只需配置一套。只配置 `SYNC_SECRET` 时，学习同步仍正常，语音对话会自动使用原有智谱/浏览器方案。
 
 部署完成后，在应用设置页填写 Workers 地址和同一个同步密码。手机与电脑各连接一次即可。请使用至少 12 位且不与其他账号共用的密码。
 
