@@ -74,6 +74,8 @@ requireText(app, "data-speaking-translation", "collapsed speaking translation");
 requireText(server, 'body.training?.mode === "speaking"', "backend speaking contract");
 requireText(app, 'training: { mode: "voice-review", assistantReply: replyText }', "voice-turn Zhipu review");
 requireText(app, "startDoubaoVoiceConversation", "Doubao real-time voice preference");
+requireText(app, "ensureDoubaoRealtimeClient", "Doubao client recovery loader");
+requireText(app, "豆包实时语音连接失败", "visible Doubao connection failure");
 requireText(doubao, "class DoubaoRealtimeClient", "Doubao browser client");
 requireText(doubao, "downsampleToPcm16", "16 kHz PCM microphone stream");
 requireText(doubao, "EVENTS.TTS_RESPONSE", "streaming Doubao audio playback");
@@ -81,7 +83,7 @@ requireText(worker, 'url.pathname === "/voice-session"', "short-lived Doubao voi
 requireText(worker, 'url.pathname === "/doubao-realtime"', "Doubao WebSocket gateway");
 requireText(worker, 'headers["X-Api-Key"] = apiKey', "new Doubao API key authentication");
 requireText(worker, '"X-Api-Access-Key"', "server-side Doubao credentials");
-requireText(html, "doubao-realtime.js?v=60", "v60 Doubao client cache bust");
-requireText(html, "app.js?v=60", "v60 script cache bust");
+requireText(html, "doubao-realtime.js?v=61", "v61 Doubao client cache bust");
+requireText(html, "app.js?v=61", "v61 script cache bust");
 
 console.log("AI contract smoke test passed");

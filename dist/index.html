@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=60" />
+    <link rel="stylesheet" href="./styles.css?v=61" />
   </head>
   <body>
     <div class="app-shell">
@@ -309,7 +309,7 @@
                 <p id="aiScenarioGoal">围绕校园日常自然交流，并学会补充理由。</p>
               </div>
               <button class="button ghost small" type="button" id="aiReset">重新开始当前情景</button>
-              <p class="ai-privacy">聊天记录只保存在当前浏览器。文字纠错由智谱处理；配置豆包网关后，语音对话会优先使用豆包实时语音。</p>
+              <p class="ai-privacy">聊天记录只保存在当前浏览器。文字纠错和 15 分钟口语目前由智谱处理；“语音对话”在连接 Cloudflare 同步后使用豆包实时语音。</p>
             </aside>
 
             <article class="card ai-chat-card">
@@ -388,7 +388,7 @@
                   <button class="button primary ai-voice-toggle" type="button" id="aiVoiceToggle">开始语音练习</button>
                   <button class="button ghost" type="button" id="aiVoiceEnd" hidden>结束练习</button>
                 </div>
-                <p class="ai-voice-privacy">Cloudflare 已配置豆包时，会优先使用低延迟实时语音并自动判断停顿；否则继续使用智谱单句识别或浏览器识别。录音只用于当次对话，不会保存。</p>
+                <p class="ai-voice-privacy">连接“设备自动同步”后，这里使用豆包低延迟实时语音并自动判断停顿；连接失败会显示真实原因，不会悄悄切换服务。录音只用于当次对话，不会保存。</p>
               </div>
 
               <div class="ai-writing-panel" id="aiWritingPanel" hidden>
@@ -553,7 +553,7 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./doubao-realtime.js?v=60" defer></script>
-    <script src="./app.js?v=60" defer></script>
+    <script src="./doubao-realtime.js?v=61" defer></script>
+    <script src="./app.js?v=61" defer></script>
   </body>
 </html>

@@ -5297,12 +5297,43 @@ async function startDoubaoVoiceConversation() {
   }
 }
 
+async function ensureDoubaoRealtimeClient() {
+  if (window.DoubaoRealtimeClient) return true;
+  const existing = document.querySelector("script[data-doubao-retry]");
+  if (existing) {
+    await new Promise((resolve) => {
+      if (existing.dataset.loaded === "true") return resolve();
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", resolve, { once: true });
+      window.setTimeout(resolve, 5000);
+    });
+    return Boolean(window.DoubaoRealtimeClient);
+  }
+  await new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = new URL("./doubao-realtime.js?v=61-retry", window.location.href).href;
+    script.defer = true;
+    script.dataset.doubaoRetry = "true";
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "true";
+      resolve();
+    }, { once: true });
+    script.addEventListener("error", resolve, { once: true });
+    document.head.appendChild(script);
+    window.setTimeout(resolve, 5000);
+  });
+  return Boolean(window.DoubaoRealtimeClient);
+}
+
 async function startVoiceConversation() {
-  if (syncConfig.endpoint && syncConfig.token && window.DoubaoRealtimeClient) {
+  if (syncConfig.endpoint && syncConfig.token) {
+    if (!await ensureDoubaoRealtimeClient()) {
+      return failVoiceSession("豆包语音组件未加载", "请刷新 Pages 页面后重试；若仍失败，把这条提示发给我。" );
+    }
     try {
       if (await startDoubaoVoiceConversation()) return;
     } catch (error) {
-      toast("豆包语音暂未接通", `${error.message || "实时连接失败"}；本次自动改用原有语音模式。`);
+      return failVoiceSession("豆包实时语音连接失败", error.message || "实时连接失败，请稍后重试。" );
     }
   }
   if (aiServiceStatus !== "ready") {
