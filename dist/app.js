@@ -148,7 +148,17 @@ const SPEAKING_TRANSLATION_TASKS = [
   { prompt: "科技能提高学习效率，但我们也需要避免过度依赖它。", keywords: "improve efficiency · avoid · depend too much on", skeleton: "Technology can ..., but we also need to ...", model: "Technology can improve learning efficiency, but we also need to avoid depending on it too much." }
 ];
 
-const defaultAIState = () => ({ scenario: "campus", mode: "text", sessions: {}, writingReviews: [], speakingSessions: [] });
+const defaultDoubaoBudget = () => ({
+  totalTokens: 1000000,
+  estimatedRemaining: 998000,
+  reserveTokens: 200000,
+  estimatedTokensPerTurn: 2000,
+  weeklySessionLimit: 3,
+  sessionTurnLimit: 8,
+  sessionMinuteLimit: 5,
+  sessions: []
+});
+const defaultAIState = () => ({ scenario: "campus", mode: "text", sessions: {}, writingReviews: [], speakingSessions: [], doubaoBudget: defaultDoubaoBudget() });
 const defaultVocabAssessment = () => ({
   status: "idle",
   version: 1,
@@ -253,6 +263,10 @@ let voiceSession = {
   doubaoUserText: "",
   doubaoReplyText: "",
   doubaoTurnSaved: false,
+  doubaoStartedAt: null,
+  doubaoTurns: 0,
+  doubaoTimer: null,
+  doubaoUsageRecorded: false,
   statusMessage: "准备开始语音练习",
   hintMessage: "点击开始，说一句英语；AI 会回答并由系统朗读。",
   transcript: ""
@@ -336,7 +350,12 @@ function normalizeState(parsed) {
       ...(parsed.ai || {}),
       sessions: { ...(parsed.ai?.sessions || {}) },
       writingReviews: Array.isArray(parsed.ai?.writingReviews) ? parsed.ai.writingReviews : [],
-      speakingSessions: Array.isArray(parsed.ai?.speakingSessions) ? parsed.ai.speakingSessions.slice(0, 30) : []
+      speakingSessions: Array.isArray(parsed.ai?.speakingSessions) ? parsed.ai.speakingSessions.slice(0, 30) : [],
+      doubaoBudget: {
+        ...defaultDoubaoBudget(),
+        ...(parsed.ai?.doubaoBudget || {}),
+        sessions: Array.isArray(parsed.ai?.doubaoBudget?.sessions) ? parsed.ai.doubaoBudget.sessions.slice(0, 120) : []
+      }
     },
     vocabAssessment: vocabAssessments[selectedCourse],
     vocabAssessments
@@ -3317,6 +3336,116 @@ function isSpeakingActive() {
   return speakingSession.active;
 }
 
+function getDoubaoBudget() {
+  ensureAIState();
+  if (!state.ai.doubaoBudget || typeof state.ai.doubaoBudget !== "object") state.ai.doubaoBudget = defaultDoubaoBudget();
+  const budget = state.ai.doubaoBudget;
+  budget.totalTokens = Math.max(1, Number(budget.totalTokens) || 1000000);
+  budget.estimatedRemaining = Math.max(0, Math.min(budget.totalTokens, Number(budget.estimatedRemaining) || 0));
+  budget.reserveTokens = Math.max(0, Number(budget.reserveTokens) || 200000);
+  budget.estimatedTokensPerTurn = Math.max(1, Number(budget.estimatedTokensPerTurn) || 2000);
+  budget.weeklySessionLimit = Math.max(1, Number(budget.weeklySessionLimit) || 3);
+  budget.sessionTurnLimit = Math.max(1, Number(budget.sessionTurnLimit) || 8);
+  budget.sessionMinuteLimit = Math.max(1, Number(budget.sessionMinuteLimit) || 5);
+  if (!Array.isArray(budget.sessions)) budget.sessions = [];
+  return budget;
+}
+
+function startOfCurrentWeek() {
+  const date = new Date();
+  const day = date.getDay() || 7;
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - day + 1);
+  return date.getTime();
+}
+
+function doubaoSessionsThisWeek() {
+  const weekStart = startOfCurrentWeek();
+  return getDoubaoBudget().sessions.filter((session) => Date.parse(session?.startedAt || "") >= weekStart && Number(session?.turns) > 0);
+}
+
+function formatDoubaoTokens(value) {
+  const tokens = Math.max(0, Math.round(Number(value) || 0));
+  if (tokens >= 10000) return `${(tokens / 10000).toFixed(tokens % 10000 ? 1 : 0)} 万`;
+  return tokens.toLocaleString("zh-CN");
+}
+
+function renderDoubaoBudget() {
+  const remaining = $("#doubaoBudgetRemaining");
+  if (!remaining) return;
+  const budget = getDoubaoBudget();
+  const weekly = doubaoSessionsThisWeek().length;
+  remaining.textContent = `约 ${formatDoubaoTokens(budget.estimatedRemaining)} Token`;
+  $("#doubaoWeeklyUsage").textContent = `${weekly} / ${budget.weeklySessionLimit} 次`;
+  const ratio = Math.max(0, Math.min(1, budget.estimatedRemaining / budget.totalTokens));
+  $("#doubaoBudgetBar").style.width = `${Math.round(ratio * 100)}%`;
+  $("#doubaoBudgetBar").classList.toggle("reserve", budget.estimatedRemaining <= budget.reserveTokens);
+  const input = $("#doubaoBalanceInput");
+  if (document.activeElement !== input) input.value = String(Math.round(budget.estimatedRemaining));
+  const spendable = Math.max(0, budget.estimatedRemaining - budget.reserveTokens);
+  $("#doubaoBudgetHint").textContent = budget.estimatedRemaining <= budget.reserveTokens
+    ? "已进入考前保留区：继续使用前会再次确认。实际余额以火山控制台为准。"
+    : `每轮暂按约 ${budget.estimatedTokensPerTurn} Token 估算；可日常使用约 ${formatDoubaoTokens(spendable)}，另留 ${formatDoubaoTokens(budget.reserveTokens)} 给考前两周。`;
+}
+
+function saveDoubaoBalance() {
+  const input = $("#doubaoBalanceInput");
+  const budget = getDoubaoBudget();
+  const value = Number(input?.value);
+  if (!Number.isFinite(value) || value < 0 || value > budget.totalTokens) return toast("余额格式不正确", `请输入 0 到 ${budget.totalTokens}。`);
+  budget.estimatedRemaining = Math.round(value);
+  saveState();
+  renderDoubaoBudget();
+  toast("豆包余额已校准", "之后会按每轮约 2000 Token 继续估算。" );
+}
+
+function confirmDoubaoBudgetStart() {
+  const budget = getDoubaoBudget();
+  if (budget.estimatedRemaining <= 0) {
+    toast("豆包估算余额已用完", "请先在额度保护卡片中校准实际余额。" );
+    return false;
+  }
+  const warnings = [];
+  const weekly = doubaoSessionsThisWeek().length;
+  if (weekly >= budget.weeklySessionLimit) warnings.push(`本周已经完成 ${weekly} 次豆包训练，超过每周 ${budget.weeklySessionLimit} 次的建议`);
+  if (budget.estimatedRemaining <= budget.reserveTokens) warnings.push("当前已进入预留给考前两周的 20 万 Token 区间");
+  if (!warnings.length) return true;
+  return window.confirm(`${warnings.join("；")}。\n\n仍然开始本次 5 分钟练习吗？`);
+}
+
+function beginDoubaoBudgetSession() {
+  const budget = getDoubaoBudget();
+  voiceSession.doubaoStartedAt = new Date().toISOString();
+  voiceSession.doubaoTurns = 0;
+  voiceSession.doubaoUsageRecorded = false;
+  clearTimeout(voiceSession.doubaoTimer);
+  voiceSession.doubaoTimer = window.setTimeout(() => {
+    if (!voiceSession.active || !voiceSession.doubao) return;
+    settleVoiceSession("已到 5 分钟，本次豆包实战自动结束");
+    toast("本次豆包实战已完成", "接下来适合回到 15 分钟训练查看纠错和复盘。" );
+  }, budget.sessionMinuteLimit * 60 * 1000);
+}
+
+function recordDoubaoBudgetSession(reason = "ended") {
+  if (!voiceSession.doubaoStartedAt || voiceSession.doubaoUsageRecorded) return;
+  voiceSession.doubaoUsageRecorded = true;
+  const turns = Math.max(0, Number(voiceSession.doubaoTurns) || 0);
+  if (!turns) return;
+  const budget = getDoubaoBudget();
+  const estimatedTokens = turns * budget.estimatedTokensPerTurn;
+  budget.estimatedRemaining = Math.max(0, budget.estimatedRemaining - estimatedTokens);
+  budget.sessions.unshift({
+    startedAt: voiceSession.doubaoStartedAt,
+    endedAt: new Date().toISOString(),
+    turns,
+    estimatedTokens,
+    reason,
+    scenario: state.ai.scenario
+  });
+  budget.sessions = budget.sessions.slice(0, 120);
+  saveState();
+}
+
 function renderVoiceUI() {
   const stage = $("#aiVoiceStage");
   if (!stage) return;
@@ -3355,13 +3484,16 @@ function renderVoiceUI() {
   toggle.disabled = ["connecting", "processing", "thinking"].includes(voiceSession.state);
   const endButton = $("#aiVoiceEnd");
   if (endButton) endButton.hidden = !active;
+  renderDoubaoBudget();
 }
 
 function closeVoiceResources() {
   clearTimeout(voiceSession.restartTimer);
   clearTimeout(voiceSession.stopTimer);
+  clearTimeout(voiceSession.doubaoTimer);
   voiceSession.restartTimer = null;
   voiceSession.stopTimer = null;
+  voiceSession.doubaoTimer = null;
   if (voiceSession.mediaRecorder) {
     voiceSession.abortRecording = true;
     try { if (voiceSession.mediaRecorder.state !== "inactive") voiceSession.mediaRecorder.stop(); } catch {}
@@ -3388,9 +3520,13 @@ function closeVoiceResources() {
   voiceSession.doubaoReplyText = "";
   voiceSession.doubaoTurnSaved = false;
   try { doubao?.close(); } catch {}
+  voiceSession.doubaoStartedAt = null;
+  voiceSession.doubaoTurns = 0;
+  voiceSession.doubaoUsageRecorded = false;
 }
 
 function settleVoiceSession(message = "本次语音练习已结束") {
+  recordDoubaoBudgetSession("ended");
   closeVoiceResources();
   voiceSession.active = false;
   voiceSession.state = "idle";
@@ -3400,6 +3536,7 @@ function settleVoiceSession(message = "本次语音练习已结束") {
 }
 
 function failVoiceSession(message, hint = "请检查麦克风权限与 AI 配置后重试。") {
+  recordDoubaoBudgetSession("interrupted");
   closeVoiceResources();
   voiceSession.active = false;
   voiceSession.state = "error";
@@ -5203,7 +5340,7 @@ async function submitVoiceTurn(content) {
 
 function doubaoVoiceInstructions() {
   const current = AI_SCENARIOS[state.ai.scenario] || AI_SCENARIOS.campus;
-  return `You are 蘑菇酱, a patient English speaking partner for one Chinese CET-4 learner around B1 level. Current scenario: ${current.title}. Goal: ${current.goal}. Speak mainly in clear, natural English. Keep each turn to 2–3 short sentences and no more than 45 English words. End with one short useful follow-up question. If the learner uses Chinese, briefly help them say the idea in English. Do not lecture, do not announce corrections, and do not speak Chinese unless the learner is stuck.`;
+  return `You are 蘑菇酱, a patient English speaking partner for one Chinese CET-4 learner around B1 level. Current scenario: ${current.title}. Goal: ${current.goal}. Speak mainly in clear, natural English. Keep each turn to 1–2 short sentences and no more than 30 English words to save the learner's voice quota. End with one short useful follow-up question. If the learner uses Chinese, briefly help them say the idea in English. Do not lecture, do not announce corrections, and do not speak Chinese unless the learner is stuck.`;
 }
 
 async function enrichDoubaoVoiceTurn(userText, replyText, assistantMessage) {
@@ -5240,9 +5377,16 @@ function saveDoubaoVoiceTurn() {
   saveState();
   renderAI();
   void enrichDoubaoVoiceTurn(userText, replyText, assistantMessage);
+  voiceSession.doubaoTurns += 1;
+  const reachedLimit = voiceSession.doubaoTurns >= getDoubaoBudget().sessionTurnLimit;
   voiceSession.doubaoUserText = "";
   voiceSession.doubaoReplyText = "";
   voiceSession.doubaoTurnSaved = false;
+  if (reachedLimit) window.setTimeout(() => {
+    if (!voiceSession.active || !voiceSession.doubao) return;
+    settleVoiceSession("已完成 8 轮，本次豆包实战自动结束");
+    toast("本次豆包实战已完成", "额度保护已在 8 轮时自动结束。" );
+  }, 400);
 }
 
 async function startDoubaoVoiceConversation() {
@@ -5288,6 +5432,8 @@ async function startDoubaoVoiceConversation() {
   renderVoiceUI();
   try {
     await client.connect();
+    beginDoubaoBudgetSession();
+    renderVoiceUI();
     return true;
   } catch (error) {
     if (voiceSession.doubao === client) closeVoiceResources();
@@ -5311,7 +5457,7 @@ async function ensureDoubaoRealtimeClient() {
   }
   await new Promise((resolve) => {
     const script = document.createElement("script");
-    script.src = new URL("./doubao-realtime.js?v=61-retry", window.location.href).href;
+    script.src = new URL("./doubao-realtime.js?v=63-retry", window.location.href).href;
     script.defer = true;
     script.dataset.doubaoRetry = "true";
     script.addEventListener("load", () => {
@@ -5327,6 +5473,7 @@ async function ensureDoubaoRealtimeClient() {
 
 async function startVoiceConversation() {
   if (syncConfig.endpoint && syncConfig.token) {
+    if (!confirmDoubaoBudgetStart()) return;
     if (!await ensureDoubaoRealtimeClient()) {
       return failVoiceSession("豆包语音组件未加载", "请刷新 Pages 页面后重试；若仍失败，把这条提示发给我。" );
     }
@@ -5357,6 +5504,7 @@ function finishVoiceConversation() {
 }
 
 function stopVoiceImmediately(shouldRender = true) {
+  recordDoubaoBudgetSession("stopped");
   closeVoiceResources();
   voiceSession.active = false;
   voiceSession.state = "idle";
@@ -5984,6 +6132,7 @@ function bindEvents() {
   $("#aiDictation").addEventListener("click", toggleTextDictation);
   $("#aiVoiceToggle").addEventListener("click", toggleVoiceConversation);
   $("#aiVoiceEnd").addEventListener("click", finishVoiceConversation);
+  $("#doubaoBalanceSave").addEventListener("click", saveDoubaoBalance);
   $("#speakingStart").addEventListener("click", startSpeakingSession);
   $("#speakingRecord").addEventListener("click", toggleSpeakingRecording);
   $("#speakingHint").addEventListener("click", revealSpeakingHint);

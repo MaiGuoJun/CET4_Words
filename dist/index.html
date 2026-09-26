@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=62" />
+    <link rel="stylesheet" href="./styles.css?v=63" />
   </head>
   <body>
     <div class="app-shell">
@@ -318,9 +318,9 @@
                 <span id="aiTurnCount">0 轮</span>
               </div>
               <div class="ai-mode-switch" role="tablist" aria-label="对话方式">
-                <button type="button" role="tab" aria-selected="false" data-ai-mode="speaking">15 分钟口语</button>
+                <button type="button" role="tab" aria-selected="false" data-ai-mode="speaking">15 分钟训练</button>
                 <button class="active" type="button" role="tab" aria-selected="true" data-ai-mode="text">文字对话</button>
-                <button type="button" role="tab" aria-selected="false" data-ai-mode="voice">语音对话</button>
+                <button type="button" role="tab" aria-selected="false" data-ai-mode="voice">豆包实战</button>
                 <button type="button" role="tab" aria-selected="false" data-ai-mode="writing">作文 / 翻译批改</button>
               </div>
 
@@ -372,6 +372,19 @@
               </div>
 
               <div class="ai-voice-panel" id="aiVoicePanel" hidden>
+                <section class="doubao-budget" aria-label="豆包额度保护">
+                  <div class="doubao-budget-head">
+                    <div><span>额度保护</span><strong id="doubaoBudgetRemaining">约 99.8 万 Token</strong></div>
+                    <div><span>本周训练</span><strong id="doubaoWeeklyUsage">0 / 3 次</strong></div>
+                    <div><span>本次上限</span><strong>5 分钟 · 8 轮</strong></div>
+                  </div>
+                  <div class="doubao-budget-track" aria-hidden="true"><i id="doubaoBudgetBar"></i></div>
+                  <div class="doubao-budget-foot">
+                    <p id="doubaoBudgetHint">每轮暂按约 2000 Token 估算；预留 20 万给考前两周，实际余额以火山控制台为准。</p>
+                    <label>校准余额 <input id="doubaoBalanceInput" type="number" min="0" max="1000000" step="1000" inputmode="numeric" aria-label="豆包当前剩余 Token"/></label>
+                    <button class="button ghost small" type="button" id="doubaoBalanceSave">保存</button>
+                  </div>
+                </section>
                 <div class="ai-voice-stage" id="aiVoiceStage" data-state="idle">
                   <div class="ai-voice-orbit" aria-hidden="true"><i></i><i></i><span>MIC</span></div>
                   <p class="card-kicker">LIVE SPEAKING</p>
@@ -388,7 +401,7 @@
                   <button class="button primary ai-voice-toggle" type="button" id="aiVoiceToggle">开始语音练习</button>
                   <button class="button ghost" type="button" id="aiVoiceEnd" hidden>结束练习</button>
                 </div>
-                <p class="ai-voice-privacy">连接“设备自动同步”后，这里使用豆包低延迟实时语音并自动判断停顿；连接失败会显示真实原因，不会悄悄切换服务。录音只用于当次对话，不会保存。</p>
+                <p class="ai-voice-privacy">把豆包留给临场交流：15 分钟训练里的中译英、纠错与复盘仍由智谱完成。连接失败会显示真实原因，不会悄悄切换服务；录音只用于当次对话，不会保存。</p>
               </div>
 
               <div class="ai-writing-panel" id="aiWritingPanel" hidden>
@@ -553,7 +566,7 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./doubao-realtime.js?v=62" defer></script>
-    <script src="./app.js?v=62" defer></script>
+    <script src="./doubao-realtime.js?v=63" defer></script>
+    <script src="./app.js?v=63" defer></script>
   </body>
 </html>

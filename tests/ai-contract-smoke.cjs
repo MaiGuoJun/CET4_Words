@@ -83,7 +83,14 @@ requireText(worker, 'url.pathname === "/voice-session"', "short-lived Doubao voi
 requireText(worker, 'url.pathname === "/doubao-realtime"', "Doubao WebSocket gateway");
 requireText(worker, 'headers["X-Api-Key"] = apiKey', "new Doubao API key authentication");
 requireText(worker, '"X-Api-Access-Key"', "server-side Doubao credentials");
-requireText(html, "doubao-realtime.js?v=62", "v62 Doubao client cache bust");
-requireText(html, "app.js?v=62", "v62 script cache bust");
+requireText(html, "doubao-realtime.js?v=63", "v63 Doubao client cache bust");
+requireText(html, "app.js?v=63", "v63 script cache bust");
+requireText(html, 'id="doubaoBudgetRemaining"', "Doubao budget protection panel");
+requireText(html, 'id="doubaoBalanceInput"', "manual Doubao balance calibration");
+requireText(app, "defaultDoubaoBudget", "persistent Doubao budget defaults");
+requireText(app, "sessionTurnLimit: 8", "eight-turn Doubao session guard");
+requireText(app, "sessionMinuteLimit: 5", "five-minute Doubao session guard");
+requireText(app, "weeklySessionLimit: 3", "weekly Doubao session guard");
+requireText(app, "recordDoubaoBudgetSession", "Doubao usage estimator");
 
 console.log("AI contract smoke test passed");
