@@ -152,10 +152,12 @@ async function proxyDoubaoRealtime(request, env, url) {
     return json(request, env, 401, { error: "语音连接票据无效或已过期" });
   }
   const apiKey = String(env.DOUBAO_API_KEY || "").trim();
+  const requestId = crypto.randomUUID();
   const headers = {
     Upgrade: "websocket",
     "X-Api-Resource-Id": DOUBAO_RESOURCE_ID,
-    "X-Api-Connect-Id": crypto.randomUUID()
+    "X-Api-Request-Id": requestId,
+    "X-Api-Connect-Id": requestId
   };
   if (apiKey) headers["X-Api-Key"] = apiKey;
   else {
@@ -164,7 +166,11 @@ async function proxyDoubaoRealtime(request, env, url) {
     headers["X-Api-App-Key"] = DOUBAO_APP_KEY;
   }
   const upstream = await fetch(DOUBAO_DIALOGUE_URL, { headers });
-  if (!upstream.webSocket) return json(request, env, 502, { error: "豆包实时语音连接失败" });
+  if (!upstream.webSocket) {
+    const detail = String(await upstream.text().catch(() => "")).slice(0, 800);
+    console.error("Doubao WebSocket handshake rejected", JSON.stringify({ requestId, status: upstream.status, detail }));
+    return json(request, env, 502, { error: `豆包实时语音握手失败（${upstream.status || "未知状态"}）`, requestId });
+  }
   return upstream;
 }
 
