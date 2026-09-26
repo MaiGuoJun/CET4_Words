@@ -131,6 +131,15 @@ function doubaoConfigured(env) {
 
 async function issueVoiceSession(request, env) {
   if (!doubaoConfigured(env)) return json(request, env, 503, { error: "豆包实时语音尚未配置" });
+  const probe = await openDoubaoRealtime(env);
+  if (!probe.upstream?.webSocket) {
+    console.error("Doubao voice preflight rejected", JSON.stringify({ requestId: probe.requestId, status: probe.status, detail: probe.detail }));
+    return json(request, env, 502, {
+      error: doubaoHandshakeError(probe.status),
+      requestId: probe.requestId
+    });
+  }
+  try { probe.upstream.webSocket.close(1000, "preflight-complete"); } catch {}
   const ticket = await createVoiceTicket(env);
   const url = new URL(request.url);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -143,14 +152,14 @@ async function issueVoiceSession(request, env) {
   });
 }
 
-async function proxyDoubaoRealtime(request, env, url) {
-  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
-    return json(request, env, 426, { error: "Expected WebSocket upgrade" });
-  }
-  if (!doubaoConfigured(env)) return json(request, env, 503, { error: "豆包实时语音尚未配置" });
-  if (!await validVoiceTicket(url.searchParams.get("ticket"), env)) {
-    return json(request, env, 401, { error: "语音连接票据无效或已过期" });
-  }
+function doubaoHandshakeError(status) {
+  if (status === 401) return "豆包 API Key 无效或已失效（401）";
+  if (status === 403) return "豆包 API Key 没有开通端到端实时语音权限（403）";
+  if (status === 429) return "豆包实时语音额度或并发已达到上限（429）";
+  return `豆包实时语音握手被拒绝（${status || "网络错误"}）`;
+}
+
+async function openDoubaoRealtime(env) {
   const apiKey = String(env.DOUBAO_API_KEY || "").trim();
   const requestId = crypto.randomUUID();
   const headers = {
@@ -165,13 +174,29 @@ async function proxyDoubaoRealtime(request, env, url) {
     headers["X-Api-Access-Key"] = String(env.DOUBAO_ACCESS_TOKEN).trim();
     headers["X-Api-App-Key"] = DOUBAO_APP_KEY;
   }
-  const upstream = await fetch(DOUBAO_DIALOGUE_URL, { headers });
-  if (!upstream.webSocket) {
-    const detail = String(await upstream.text().catch(() => "")).slice(0, 800);
-    console.error("Doubao WebSocket handshake rejected", JSON.stringify({ requestId, status: upstream.status, detail }));
-    return json(request, env, 502, { error: `豆包实时语音握手失败（${upstream.status || "未知状态"}）`, requestId });
+  try {
+    const upstream = await fetch(DOUBAO_DIALOGUE_URL, { headers });
+    const detail = upstream.webSocket ? "" : String(await upstream.text().catch(() => "")).slice(0, 800);
+    return { upstream, requestId, status: upstream.status, detail };
+  } catch (error) {
+    return { upstream: null, requestId, status: 0, detail: String(error?.message || error || "").slice(0, 800) };
   }
-  return upstream;
+}
+
+async function proxyDoubaoRealtime(request, env, url) {
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    return json(request, env, 426, { error: "Expected WebSocket upgrade" });
+  }
+  if (!doubaoConfigured(env)) return json(request, env, 503, { error: "豆包实时语音尚未配置" });
+  if (!await validVoiceTicket(url.searchParams.get("ticket"), env)) {
+    return json(request, env, 401, { error: "语音连接票据无效或已过期" });
+  }
+  const connection = await openDoubaoRealtime(env);
+  if (!connection.upstream?.webSocket) {
+    console.error("Doubao WebSocket handshake rejected", JSON.stringify({ requestId: connection.requestId, status: connection.status, detail: connection.detail }));
+    return json(request, env, 502, { error: doubaoHandshakeError(connection.status), requestId: connection.requestId });
+  }
+  return connection.upstream;
 }
 
 function parseRow(row) {
