@@ -131,7 +131,24 @@ const AI_SCENARIOS = {
   }
 };
 
-const defaultAIState = () => ({ scenario: "campus", mode: "text", sessions: {}, writingReviews: [] });
+const SPEAKING_PHASES = [
+  { id: "warmup", label: "英语热身", short: "2 分钟", seconds: 120, kind: "WARM UP" },
+  { id: "translation", label: "中译英", short: "4 分钟", seconds: 240, kind: "THINK IN ENGLISH" },
+  { id: "scenario", label: "情景对话", short: "5 分钟", seconds: 300, kind: "CONVERSATION" },
+  { id: "shadowing", label: "针对性跟读", short: "3 分钟", seconds: 180, kind: "SHADOWING" },
+  { id: "recap", label: "复盘", short: "1 分钟", seconds: 60, kind: "RECAP" }
+];
+
+const SPEAKING_TRANSLATION_TASKS = [
+  { prompt: "我过去总担心在课堂上说错英语，但现在我愿意先把意思表达出来。", keywords: "used to · worry about · be willing to", skeleton: "I used to ..., but now I am willing to ...", model: "I used to worry about making mistakes in class, but now I am willing to express my ideas first." },
+  { prompt: "如果每天坚持练习十五分钟，我就能更自然地用英语组织想法。", keywords: "keep practicing · every day · organize my thoughts", skeleton: "If I keep ..., I will be able to ...", model: "If I keep practicing for fifteen minutes every day, I will be able to organize my thoughts more naturally in English." },
+  { prompt: "与其逐字翻译，我更想先抓住核心意思，再选择自然的英语表达。", keywords: "rather than · word for word · main idea", skeleton: "Rather than ..., I would like to ... first and then ...", model: "Rather than translate word for word, I would like to grasp the main idea first and then choose a natural English expression." },
+  { prompt: "参加社团不仅让我认识了新朋友，也让我更有信心公开表达观点。", keywords: "not only · make friends · express opinions", skeleton: "Joining ... not only ..., but also ...", model: "Joining a student club not only helped me make new friends, but also made me more confident about expressing my opinions in public." },
+  { prompt: "虽然旅行计划临时改变了，我们还是找到了一种更方便的交通方式。", keywords: "although · change unexpectedly · convenient", skeleton: "Although ..., we still found ...", model: "Although our travel plan changed unexpectedly, we still found a more convenient way to travel." },
+  { prompt: "科技能提高学习效率，但我们也需要避免过度依赖它。", keywords: "improve efficiency · avoid · depend too much on", skeleton: "Technology can ..., but we also need to ...", model: "Technology can improve learning efficiency, but we also need to avoid depending on it too much." }
+];
+
+const defaultAIState = () => ({ scenario: "campus", mode: "text", sessions: {}, writingReviews: [], speakingSessions: [] });
 const defaultVocabAssessment = () => ({
   status: "idle",
   version: 1,
@@ -232,10 +249,15 @@ let voiceSession = {
   utterance: null,
   audio: null,
   objectUrl: null,
+  doubao: null,
+  doubaoUserText: "",
+  doubaoReplyText: "",
+  doubaoTurnSaved: false,
   statusMessage: "准备开始语音练习",
   hintMessage: "点击开始，说一句英语；AI 会回答并由系统朗读。",
   transcript: ""
 };
+let speakingSession = freshSpeakingSession();
 let textDictation = {
   recognition: null,
   mediaRecorder: null,
@@ -313,7 +335,8 @@ function normalizeState(parsed) {
       ...base.ai,
       ...(parsed.ai || {}),
       sessions: { ...(parsed.ai?.sessions || {}) },
-      writingReviews: Array.isArray(parsed.ai?.writingReviews) ? parsed.ai.writingReviews : []
+      writingReviews: Array.isArray(parsed.ai?.writingReviews) ? parsed.ai.writingReviews : [],
+      speakingSessions: Array.isArray(parsed.ai?.speakingSessions) ? parsed.ai.speakingSessions.slice(0, 30) : []
     },
     vocabAssessment: vocabAssessments[selectedCourse],
     vocabAssessments
@@ -2775,12 +2798,332 @@ function closeAudioImportDialog() {
   $("#audioImportForm").reset();
 }
 
+function freshSpeakingSession() {
+  return {
+    active: false,
+    completed: false,
+    startedAt: null,
+    phaseIndex: 0,
+    phaseElapsed: 0,
+    totalActiveSeconds: 0,
+    interval: null,
+    hintTimer: null,
+    hintAvailable: false,
+    hintLevel: 0,
+    currentTask: null,
+    turns: [],
+    errors: [],
+    latestAnswer: "",
+    latestFeedback: [],
+    latestReply: "",
+    latestTranslation: "",
+    translationVisible: false,
+    pending: false,
+    status: "idle",
+    statusMessage: "计时只统计有效练习；AI 生成回答时会自动暂停。",
+    translationIndex: 0,
+    conversationTurns: 0,
+    retryTarget: "",
+    retrying: false,
+    mediaRecorder: null,
+    mediaStream: null,
+    mediaChunks: [],
+    recognition: null,
+    stopTimer: null,
+    abortRecording: false,
+    shadowSentence: "",
+    shadowAttempts: [],
+    referenceAudio: null,
+    referenceObjectUrl: null
+  };
+}
+
+function speakingPhase() {
+  return SPEAKING_PHASES[speakingSession.phaseIndex] || SPEAKING_PHASES.at(-1);
+}
+
+function speakingWarmupTask() {
+  const scenario = AI_SCENARIOS[state.ai.scenario] || AI_SCENARIOS.campus;
+  const hints = {
+    campus: ["daily routine · enjoy · because", "One part of my school day that I enjoy is ... because ...", "One part of my school day that I enjoy is studying in the library because it is quiet and helps me focus."],
+    travel: ["would like to · travel by · because", "I would like to go to ... and I would travel there by ...", "I would like to visit Hangzhou and travel there by high-speed train because it is convenient."],
+    interview: ["I am · one strength · for example", "One of my strengths is ... For example, ...", "One of my strengths is patience. For example, I stay calm when a team needs time to solve a problem."],
+    technology: ["has helped me · save time · learn", "The change that has helped me most is ... because ...", "Online learning tools have helped me most because they let me review difficult points at my own pace."],
+    free: ["today · would like to talk about · because", "Today, I would like to talk about ... because ...", "Today, I would like to talk about music because it helps me relax after studying."]
+  };
+  return { prompt: scenario.opening, keywords: hints[state.ai.scenario][0], skeleton: hints[state.ai.scenario][1], model: hints[state.ai.scenario][2] };
+}
+
+function speakingScenarioTask(prompt = "") {
+  const scenario = AI_SCENARIOS[state.ai.scenario] || AI_SCENARIOS.campus;
+  return {
+    prompt: prompt || scenario.opening,
+    keywords: "opinion · reason · example",
+    skeleton: "I think ... because ... For example, ...",
+    model: "I think this is useful because it makes daily life easier. For example, it can help students save time and focus on important tasks."
+  };
+}
+
+function speakingTranslationTask() {
+  const offset = Number(state.ai.speakingSessions?.length || 0) % SPEAKING_TRANSLATION_TASKS.length;
+  return SPEAKING_TRANSLATION_TASKS[(offset + speakingSession.translationIndex) % SPEAKING_TRANSLATION_TASKS.length];
+}
+
+function pickSpeakingShadowSentence() {
+  const corrected = speakingSession.errors.find((item) => item?.correction)?.correction;
+  if (corrected) return corrected;
+  const reply = String(speakingSession.latestReply || "").trim();
+  const firstSentence = reply.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim();
+  return firstSentence || reply || "I can express my ideas clearly when I give myself time to think.";
+}
+
+function clearSpeakingHintTimer() {
+  clearTimeout(speakingSession.hintTimer);
+  speakingSession.hintTimer = null;
+}
+
+function armSpeakingHints() {
+  clearSpeakingHintTimer();
+  speakingSession.hintAvailable = false;
+  speakingSession.hintLevel = 0;
+  const phase = speakingPhase()?.id;
+  if (!["warmup", "translation", "scenario"].includes(phase)) return;
+  speakingSession.hintTimer = window.setTimeout(() => {
+    if (!speakingSession.active || speakingSession.pending) return;
+    speakingSession.hintAvailable = true;
+    renderSpeakingSession();
+  }, 8000);
+}
+
+function setSpeakingTaskForPhase() {
+  const phase = speakingPhase();
+  speakingSession.latestAnswer = "";
+  speakingSession.latestFeedback = [];
+  speakingSession.latestTranslation = "";
+  speakingSession.translationVisible = false;
+  speakingSession.retryTarget = "";
+  speakingSession.retrying = false;
+  if (phase.id === "warmup") speakingSession.currentTask = speakingWarmupTask();
+  if (phase.id === "translation") speakingSession.currentTask = speakingTranslationTask();
+  if (phase.id === "scenario") speakingSession.currentTask = speakingScenarioTask();
+  if (phase.id === "shadowing") {
+    speakingSession.shadowSentence = pickSpeakingShadowSentence();
+    speakingSession.currentTask = { prompt: speakingSession.shadowSentence, keywords: "", skeleton: "", model: speakingSession.shadowSentence };
+  }
+  if (phase.id === "recap") speakingSession.currentTask = { prompt: "今天的有效练习已经完成。看看哪些表达正在变得更自然。", keywords: "", skeleton: "", model: "" };
+  armSpeakingHints();
+}
+
+function startSpeakingClock() {
+  clearInterval(speakingSession.interval);
+  speakingSession.interval = window.setInterval(() => {
+    if (!speakingSession.active || speakingSession.pending || speakingSession.status === "processing") return;
+    speakingSession.totalActiveSeconds += 1;
+    speakingSession.phaseElapsed += 1;
+    const phase = speakingPhase();
+    if (speakingSession.phaseElapsed >= phase.seconds && speakingSession.status !== "recording") advanceSpeakingPhase();
+    else renderSpeakingSession();
+  }, 1000);
+}
+
+function stopSpeakingResources(abort = true) {
+  clearTimeout(speakingSession.stopTimer);
+  speakingSession.stopTimer = null;
+  if (speakingSession.mediaRecorder) {
+    speakingSession.abortRecording = abort;
+    try { if (speakingSession.mediaRecorder.state !== "inactive") speakingSession.mediaRecorder.stop(); } catch {}
+  }
+  const recognition = speakingSession.recognition;
+  speakingSession.recognition = null;
+  try { abort ? recognition?.abort() : recognition?.stop(); } catch {}
+  speakingSession.mediaStream?.getTracks().forEach((track) => track.stop());
+  speakingSession.mediaRecorder = null;
+  speakingSession.mediaStream = null;
+  speakingSession.mediaChunks = [];
+  if (speakingSession.referenceAudio) {
+    speakingSession.referenceAudio.pause();
+    speakingSession.referenceAudio.src = "";
+  }
+  if (speakingSession.referenceObjectUrl) URL.revokeObjectURL(speakingSession.referenceObjectUrl);
+  speakingSession.referenceAudio = null;
+  speakingSession.referenceObjectUrl = null;
+}
+
+function startSpeakingSession() {
+  if (speakingSession.active) return;
+  if (aiServiceStatus !== "ready") return toast("AI 尚未就绪", "请先在设置中配置手机 AI，或启动电脑本机服务。" );
+  stopSpeakingResources();
+  clearInterval(speakingSession.interval);
+  speakingSession = freshSpeakingSession();
+  speakingSession.active = true;
+  speakingSession.startedAt = new Date().toISOString();
+  speakingSession.status = "ready";
+  speakingSession.statusMessage = "先听懂问题，再直接用英语回答；想不起来时，8 秒后可以逐级查看提示。";
+  setSpeakingTaskForPhase();
+  startSpeakingClock();
+  renderSpeakingSession();
+}
+
+function advanceSpeakingPhase() {
+  if (!speakingSession.active || speakingSession.pending) return;
+  stopSpeakingResources();
+  clearSpeakingHintTimer();
+  if (speakingSession.phaseIndex >= SPEAKING_PHASES.length - 1) return finishSpeakingSession();
+  speakingSession.phaseIndex += 1;
+  speakingSession.phaseElapsed = 0;
+  speakingSession.status = "ready";
+  speakingSession.statusMessage = speakingPhase().id === "shadowing"
+    ? "先听标准句，再跟读；最多三次，保留最好成绩。"
+    : speakingPhase().id === "recap" ? "复盘只保留今天最值得改的一点。" : "准备好了就直接回答。";
+  setSpeakingTaskForPhase();
+  renderSpeakingSession();
+}
+
+function finishSpeakingSession() {
+  if (!speakingSession.active && speakingSession.completed) return;
+  stopSpeakingResources();
+  clearSpeakingHintTimer();
+  clearInterval(speakingSession.interval);
+  speakingSession.interval = null;
+  speakingSession.active = false;
+  speakingSession.completed = true;
+  speakingSession.phaseIndex = SPEAKING_PHASES.length - 1;
+  speakingSession.currentTask = { prompt: "今天的有效练习已经完成。看看哪些表达正在变得更自然。", keywords: "", skeleton: "", model: "" };
+  const bestShadow = Math.max(0, ...speakingSession.shadowAttempts.map((item) => Number(item.score) || 0));
+  state.ai.speakingSessions ||= [];
+  state.ai.speakingSessions.unshift({
+    startedAt: speakingSession.startedAt,
+    completedAt: new Date().toISOString(),
+    activeSeconds: speakingSession.totalActiveSeconds,
+    turns: speakingSession.turns.length,
+    errors: speakingSession.errors.slice(0, 8),
+    bestShadow,
+    scenario: state.ai.scenario
+  });
+  state.ai.speakingSessions = state.ai.speakingSessions.slice(0, 30);
+  saveState();
+  speakingSession.statusMessage = "训练记录已保存；下次会继续优先练习反复出现的错误。";
+  renderSpeakingSession();
+}
+
+function revealSpeakingHint() {
+  if (!speakingSession.active || !speakingSession.currentTask) return;
+  speakingSession.hintLevel = Math.min(3, speakingSession.hintLevel + 1);
+  speakingSession.hintAvailable = true;
+  renderSpeakingSession();
+}
+
+function formatSpeakingTime(seconds) {
+  const safe = Math.max(0, Math.round(seconds));
+  return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
+}
+
+function speakingRemainingSeconds() {
+  if (speakingSession.completed) return 0;
+  return SPEAKING_PHASES.slice(speakingSession.phaseIndex + 1).reduce((total, phase) => total + phase.seconds, 0)
+    + Math.max(0, speakingPhase().seconds - speakingSession.phaseElapsed);
+}
+
+function renderSpeakingHints() {
+  const container = $("#speakingHints");
+  const task = speakingSession.currentTask;
+  if (!task || !speakingSession.hintLevel) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  const rows = [];
+  if (speakingSession.hintLevel >= 1) rows.push(`<p><b>关键词：</b>${escapeHtml(task.keywords || "opinion · reason · example")}</p>`);
+  if (speakingSession.hintLevel >= 2) rows.push(`<p><b>句型骨架：</b>${escapeHtml(task.skeleton || "I think ... because ...")}</p>`);
+  if (speakingSession.hintLevel >= 3) rows.push(`<p><b>参考表达：</b>${escapeHtml(task.model || "Try to give your opinion, one reason, and one example.")}</p>`);
+  container.innerHTML = rows.join("");
+  container.hidden = false;
+}
+
+function renderSpeakingFeedback() {
+  const answer = $("#speakingAnswer");
+  if (speakingPhase().id === "recap") {
+    const bestShadow = Math.max(0, ...speakingSession.shadowAttempts.map((item) => Number(item.score) || 0));
+    const repeated = speakingSession.errors.slice(-3);
+    answer.hidden = false;
+    answer.innerHTML = `<p><b>有效练习：</b>${formatSpeakingTime(speakingSession.totalActiveSeconds)} · ${speakingSession.turns.length} 次表达 · 最佳跟读 ${bestShadow || "—"}</p>`;
+    const recap = $("#speakingFeedback");
+    recap.hidden = false;
+    recap.innerHTML = repeated.length
+      ? `<p><b>今天优先记住：</b></p>${repeated.map((item) => `<article><strong>${escapeHtml(item.reason || "让表达更自然")}</strong><p>${escapeHtml(item.correction || item.original || "")}</p></article>`).join("")}`
+      : `<p><b>今天优先记住：</b>先完整说出意思，再慢慢追求更自然的句型。今天没有需要反复弹出的关键错误。</p>`;
+    return;
+  }
+  answer.hidden = !speakingSession.latestAnswer;
+  answer.innerHTML = speakingSession.latestAnswer ? `<p><b>你的表达：</b>${escapeHtml(speakingSession.latestAnswer)}</p>` : "";
+  const feedback = $("#speakingFeedback");
+  const items = meaningfulAIFeedback(speakingSession.latestFeedback).slice(0, 2);
+  const reply = String(speakingSession.latestReply || "").trim();
+  feedback.hidden = !items.length && !reply;
+  feedback.innerHTML = `${reply ? `<p><b>AI 回应：</b>${escapeHtml(reply)}</p>${speakingSession.latestTranslation ? `<button class="ai-translation-toggle" type="button" data-speaking-translation aria-expanded="${speakingSession.translationVisible}">${speakingSession.translationVisible ? "隐藏翻译" : "显示翻译"}</button>${speakingSession.translationVisible ? `<p><b>中文：</b>${escapeHtml(speakingSession.latestTranslation)}</p>` : ""}` : ""}` : ""}${items.map((item) => `<article><strong>只改这一处</strong><p><b>${escapeHtml(item.original || "原句")}</b> → ${escapeHtml(item.correction || "")}</p><p>${escapeHtml(item.reason || "")}</p></article>`).join("")}`;
+}
+
+function renderSpeakingShadowing() {
+  const container = $("#speakingShadowResult");
+  if (speakingPhase().id !== "shadowing") {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  const best = [...speakingSession.shadowAttempts].sort((a, b) => (b.score || 0) - (a.score || 0))[0];
+  container.hidden = false;
+  container.innerHTML = `
+    <p><b>目标句：</b>${escapeHtml(speakingSession.shadowSentence)}</p>
+    <div class="speaking-shadow-actions"><button type="button" data-speaking-play="1">▶ 正常语速</button><button type="button" data-speaking-play="0.8">▶ 0.8 倍</button><button type="button" data-speaking-play="chunk">▶ 意群播放</button></div>
+    ${best ? `<div class="score"><strong>${best.score}</strong><span>基础跟读分 · 最好成绩</span></div><p>内容 ${best.textScore ?? "—"} · 节奏 ${best.rhythmScore ?? "—"} · 尝试 ${speakingSession.shadowAttempts.length}/3</p>` : `<p>尚未跟读；这里不会把普通语音识别冒充音素评分。</p>`}`;
+}
+
+function renderSpeakingSession() {
+  const panel = $("#aiSpeakingPanel");
+  if (!panel) return;
+  const phase = speakingPhase();
+  $("#speakingPhaseTitle").textContent = speakingSession.active || speakingSession.completed ? phase.label : "15 分钟英语思维训练";
+  $("#speakingPhaseGoal").textContent = speakingSession.active || speakingSession.completed
+    ? ({ warmup: "先用简单英语进入状态。", translation: "从意思出发组织英语，不逐字硬译。", scenario: "表达观点、理由和例子，完成六轮交流。", shadowing: "跟读今天最值得掌握的一句。", recap: "只记住今天最值得改的一点。" }[phase.id])
+    : "热身、中译英、情景对话、针对性跟读和复盘一次完成。";
+  const clock = $("#speakingClock");
+  clock.querySelector("strong").textContent = formatSpeakingTime(speakingRemainingSeconds());
+  clock.classList.toggle("paused", speakingSession.pending || speakingSession.status === "processing");
+  $("#speakingPhaseTrack").innerHTML = SPEAKING_PHASES.map((item, index) => `<div class="speaking-phase-step ${index === speakingSession.phaseIndex && (speakingSession.active || speakingSession.completed) ? "active" : ""} ${index < speakingSession.phaseIndex || speakingSession.completed ? "complete" : ""}"><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.short)}</small></div>`).join("");
+  $("#speakingTaskKind").textContent = speakingSession.active || speakingSession.completed ? phase.kind : "READY";
+  $("#speakingTurnProgress").textContent = phase.id === "scenario" ? `${speakingSession.conversationTurns}/6 轮` : phase.id === "translation" ? `${Math.min(3, speakingSession.translationIndex + 1)}/3 句` : speakingSession.active ? `${formatSpeakingTime(speakingSession.phaseElapsed)} 本阶段` : "尚未开始";
+  $("#speakingPrompt").textContent = speakingSession.currentTask?.prompt || "点击开始后，系统会先用简单英语帮你进入状态。";
+  renderSpeakingHints();
+  renderSpeakingFeedback();
+  renderSpeakingShadowing();
+  const start = $("#speakingStart");
+  start.hidden = speakingSession.active;
+  start.textContent = speakingSession.completed ? "再练一次" : "开始 15 分钟训练";
+  const record = $("#speakingRecord");
+  const answerPhase = ["warmup", "translation", "scenario"].includes(phase.id);
+  const shadowPhase = phase.id === "shadowing";
+  record.hidden = !speakingSession.active || (!answerPhase && !shadowPhase) || speakingSession.pending || speakingSession.shadowAttempts.length >= 3;
+  record.classList.toggle("speaking-recording", speakingSession.status === "recording");
+  record.textContent = speakingSession.status === "recording" ? "■ 说完了，停止录音" : shadowPhase ? `◉ 开始跟读（${speakingSession.shadowAttempts.length + 1}/3）` : speakingSession.retrying ? "◉ 重说修正句" : "◉ 按下开始回答";
+  const hint = $("#speakingHint");
+  hint.hidden = !speakingSession.active || !answerPhase || !speakingSession.hintAvailable || speakingSession.pending || speakingSession.hintLevel >= 3;
+  hint.textContent = speakingSession.hintLevel === 0 ? "需要一点提示" : speakingSession.hintLevel === 1 ? "显示句型骨架" : "显示参考表达";
+  $("#speakingNext").hidden = !speakingSession.active || speakingSession.pending || phase.id === "recap";
+  const finish = $("#speakingFinish");
+  finish.hidden = !speakingSession.active;
+  finish.textContent = phase.id === "recap" ? "完成并保存" : "提前结束";
+  $("#speakingTypeForm").hidden = !speakingSession.active || !answerPhase || speakingSession.pending;
+  $("#speakingTypeInput").disabled = speakingSession.status === "recording";
+  $("#speakingStatus").textContent = speakingSession.pending ? "AI 正在回应并检查关键错误，计时已暂停。" : speakingSession.statusMessage;
+}
+
 function ensureAIState() {
   if (!state.ai || typeof state.ai !== "object") state.ai = defaultAIState();
   if (!AI_SCENARIOS[state.ai.scenario]) state.ai.scenario = "campus";
-  if (!["text", "voice", "writing"].includes(state.ai.mode)) state.ai.mode = "text";
+  if (!["speaking", "text", "voice", "writing"].includes(state.ai.mode)) state.ai.mode = "text";
   if (!state.ai.sessions || typeof state.ai.sessions !== "object" || Array.isArray(state.ai.sessions)) state.ai.sessions = {};
   if (!Array.isArray(state.ai.writingReviews)) state.ai.writingReviews = [];
+  if (!Array.isArray(state.ai.speakingSessions)) state.ai.speakingSessions = [];
 }
 
 function currentAISession() {
@@ -2899,7 +3242,8 @@ function renderAI() {
   $("#aiTextPanel").hidden = state.ai.mode !== "text";
   $("#aiVoicePanel").hidden = state.ai.mode !== "voice";
   $("#aiWritingPanel").hidden = state.ai.mode !== "writing";
-  $("#aiReset").hidden = state.ai.mode === "writing";
+  $("#aiSpeakingPanel").hidden = state.ai.mode !== "speaking";
+  $("#aiReset").hidden = ["writing", "speaking"].includes(state.ai.mode);
 
   const status = $("#aiStatus");
   status.classList.toggle("ready", aiServiceStatus === "ready");
@@ -2931,6 +3275,7 @@ function renderAI() {
   renderAITextSpeechButtons();
   renderTextDictation();
   renderVoiceUI();
+  renderSpeakingSession();
   renderWritingReview();
   requestAnimationFrame(() => { $("#aiMessages").scrollTop = $("#aiMessages").scrollHeight; });
 }
@@ -2938,6 +3283,7 @@ function renderAI() {
 function selectAIScenario(scenario) {
   if (!AI_SCENARIOS[scenario] || aiPending) return;
   if (isVoiceActive()) return toast("请先结束语音对话", "结束后再切换练习情景。" );
+  if (speakingSession.active) return toast("请先结束 15 分钟口语训练", "训练结束后再切换练习情景。" );
   stopShadowing(true, false);
   stopAITextSpeech();
   if (textDictation.listening) stopTextDictation(true);
@@ -2967,13 +3313,17 @@ function isVoiceActive() {
   return voiceSession.active;
 }
 
+function isSpeakingActive() {
+  return speakingSession.active;
+}
+
 function renderVoiceUI() {
   const stage = $("#aiVoiceStage");
   if (!stage) return;
   const labels = {
     idle: [voiceSession.statusMessage, voiceSession.hintMessage],
-    connecting: ["正在启动语音练习…", "首次使用时，请允许浏览器访问麦克风。"],
-    listening: ["正在听你说…", voiceSession.mediaRecorder ? "说完后点击“发送这句”，最长可录 20 秒。" : "说完一句后停顿一下，AI 会开始回答。"],
+    connecting: ["正在启动语音练习…", voiceSession.doubao ? "正在建立豆包实时语音连接；首次使用时请允许麦克风。" : "首次使用时，请允许浏览器访问麦克风。"],
+    listening: ["正在听你说…", voiceSession.doubao ? "豆包会自动判断你何时说完，也支持在 AI 回答时直接打断。" : voiceSession.mediaRecorder ? "说完后点击“发送这句”，最长可录 20 秒。" : "说完一句后停顿一下，AI 会开始回答。"],
     processing: ["正在识别你的语音…", "录音已完成，请稍等片刻。"],
     thinking: ["AI 正在思考…", "在线回答可能需要等待十几秒。"],
     speaking: ["AI 正在朗读回答…", "朗读结束后会自动继续听你说。"],
@@ -2999,7 +3349,7 @@ function renderVoiceUI() {
   translationText.textContent = expanded ? latest.translation : "";
   const toggle = $("#aiVoiceToggle");
   const active = isVoiceActive();
-  const cloudRecording = active && voiceSession.state === "listening" && Boolean(voiceSession.mediaRecorder);
+  const cloudRecording = active && !voiceSession.doubao && voiceSession.state === "listening" && Boolean(voiceSession.mediaRecorder);
   toggle.textContent = cloudRecording ? "发送这句" : active ? "结束语音练习" : "开始语音练习";
   toggle.classList.toggle("live", active);
   toggle.disabled = ["connecting", "processing", "thinking"].includes(voiceSession.state);
@@ -3032,6 +3382,12 @@ function closeVoiceResources() {
   voiceSession.utterance = null;
   voiceSession.audio = null;
   voiceSession.objectUrl = null;
+  const doubao = voiceSession.doubao;
+  voiceSession.doubao = null;
+  voiceSession.doubaoUserText = "";
+  voiceSession.doubaoReplyText = "";
+  voiceSession.doubaoTurnSaved = false;
+  try { doubao?.close(); } catch {}
 }
 
 function settleVoiceSession(message = "本次语音练习已结束") {
@@ -3053,10 +3409,11 @@ function failVoiceSession(message, hint = "请检查麦克风权限与 AI 配置
 }
 
 function setAIMode(mode) {
-  if (!["text", "voice", "writing"].includes(mode) || state.ai.mode === mode) return;
+  if (!["speaking", "text", "voice", "writing"].includes(mode) || state.ai.mode === mode) return;
+  if (speakingSession.active && mode !== "speaking") return toast("请先结束 15 分钟口语训练", "训练计时正在进行。" );
   if (mode !== "voice" && isVoiceActive()) stopVoiceImmediately();
   stopShadowing(true, false);
-  if (mode === "voice") {
+  if (["voice", "speaking"].includes(mode)) {
     if (textDictation.listening) stopTextDictation(true);
     stopAITextSpeech();
   }
@@ -4405,15 +4762,22 @@ function updateWritingLabels() {
   $("#aiWritingInput").placeholder = translation ? "粘贴你的英文译文…" : "粘贴你的英文作文…";
 }
 
-function buildTutorInstructions(scenario) {
+function buildTutorInstructions(scenario, training = null) {
   const current = AI_SCENARIOS[scenario] || AI_SCENARIOS.campus;
-  return `You are the private English tutor inside 蘑菇酱四级 for one Chinese learner preparing for CET-4 and aiming for 500+. The learner is around B1 and wants practical conversation plus gentle correction. The current scenario is ${current.title}: ${current.goal}
+  const speakingTurn = training?.mode === "speaking";
+  const voiceReview = training?.mode === "voice-review";
+  const trainingRules = training?.mode === "speaking" ? `
+This turn belongs to a structured speaking lesson. Phase: ${training.phase || "conversation"}. Retry turn: ${Boolean(training.retry)}. The prompt shown to the learner was: ${String(training.prompt || "").slice(0, 500)}
+Respond naturally first, then ask exactly one short follow-up question unless this is a retry. Use 2–3 short sentences and no more than 45 English words. Correct at most TWO important issues, prioritizing meaning, completeness/naturalness, key grammar, then pronunciation-friendly phrasing. If the learner is retrying a corrected sentence, briefly acknowledge it and do not introduce a new topic. Do not mention scores or claim to hear pronunciation; the app evaluates audio separately.` : voiceReview ? `
+This is a post-processing pass for a completed real-time voice turn. The voice model already replied with exactly: ${String(training.assistantReply || "").slice(0, 900)}
+Do not create a different answer or another question. Put that exact English voice reply in the reply field, translate that exact reply into Chinese, and correct at most TWO important errors in the learner's message. Do not claim to hear pronunciation; only the transcript is available.` : "";
+  return `You are the private English tutor inside 蘑菇酱四级 for one Chinese learner preparing for CET-4 and aiming for 500+. The learner is around B1 and wants practical conversation plus gentle correction. The current scenario is ${current.title}: ${current.goal}${trainingRules}
 
-Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
+Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. ${speakingTurn ? "Follow the stricter structured-lesson response limits above." : voiceReview ? "Follow the voice-turn post-processing rule above exactly." : "Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as Ask: or Question:."}
 
 The app supports voice: it displays your English reply and a separate text-to-speech service reads that exact reply aloud. Never claim that you are text-only, that the app has no voice, or that spoken output is a separate answer. If asked about voice, explain this accurately and briefly.
 
-Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence that contains an actual error","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Feedback must contain only sentences that genuinely need correction; omit natural/correct sentences completely, and return an empty feedback array when there is no error. Include at most eight feedback items and two vocabulary items.`;
+Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence that contains an actual error","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Feedback must contain only sentences that genuinely need correction; omit natural/correct sentences completely, and return an empty feedback array when there is no error. Include at most ${speakingTurn || voiceReview ? "two" : "eight"} feedback items and two vocabulary items.`;
 }
 
 function parseDirectTutorReply(text) {
@@ -4431,7 +4795,7 @@ function parseDirectTutorReply(text) {
   }
 }
 
-async function requestDirectZhipu({ scenario, history, message }) {
+async function requestDirectZhipu({ scenario, history, message, training = null }) {
   if (!deviceAIConfig.apiKey) throw new Error("请先在设置中保存智谱 API Key。");
   const safeHistory = Array.isArray(history) ? history.slice(-12).flatMap((item) => {
     const role = item?.role === "assistant" ? "assistant" : item?.role === "user" ? "user" : null;
@@ -4446,7 +4810,7 @@ async function requestDirectZhipu({ scenario, history, message }) {
     },
     body: JSON.stringify({
       model: deviceAIConfig.model,
-      messages: [{ role: "system", content: buildTutorInstructions(scenario) }, ...safeHistory, { role: "user", content: message }],
+      messages: [{ role: "system", content: buildTutorInstructions(scenario, training) }, ...safeHistory, { role: "user", content: message }],
       stream: false,
       thinking: { type: "enabled", clear_thinking: false },
       response_format: { type: "json_object" },
@@ -4490,6 +4854,315 @@ async function requestAIReply(payload) {
   throw backendError || new Error("请先在设置中配置手机 AI，或在电脑上启动本机服务。");
 }
 
+function speakingHistory() {
+  return speakingSession.turns.slice(-6).flatMap((turn) => [
+    { role: "user", content: turn.answer },
+    ...(turn.reply ? [{ role: "assistant", content: turn.reply }] : [])
+  ]);
+}
+
+function moveSpeakingTaskAfterAnswer(nextPrompt = "") {
+  const phase = speakingPhase().id;
+  if (phase === "warmup") return advanceSpeakingPhase();
+  if (phase === "translation") {
+    speakingSession.translationIndex += 1;
+    if (speakingSession.translationIndex >= 3) return advanceSpeakingPhase();
+    speakingSession.currentTask = speakingTranslationTask();
+    speakingSession.latestAnswer = "";
+    speakingSession.latestFeedback = [];
+    speakingSession.latestReply = "";
+    speakingSession.latestTranslation = "";
+    speakingSession.translationVisible = false;
+    armSpeakingHints();
+    renderSpeakingSession();
+    return;
+  }
+  if (phase === "scenario") {
+    speakingSession.conversationTurns += 1;
+    if (speakingSession.conversationTurns >= 6) return advanceSpeakingPhase();
+    speakingSession.currentTask = speakingScenarioTask(nextPrompt);
+    speakingSession.latestAnswer = "";
+    speakingSession.latestFeedback = [];
+    speakingSession.latestTranslation = "";
+    speakingSession.translationVisible = false;
+    armSpeakingHints();
+    renderSpeakingSession();
+  }
+}
+
+async function submitSpeakingAnswer(answer, typed = false) {
+  const content = String(answer || "").trim();
+  if (!speakingSession.active || speakingSession.pending || !content) return;
+  const phase = speakingPhase().id;
+  if (!["warmup", "translation", "scenario"].includes(phase)) return;
+  clearSpeakingHintTimer();
+  speakingSession.latestAnswer = content;
+  speakingSession.latestFeedback = [];
+  speakingSession.pending = true;
+  speakingSession.status = "processing";
+  speakingSession.statusMessage = typed ? "正在检查文字回答；本轮不计算发音。" : "正在检查你的表达。";
+  renderSpeakingSession();
+  const retrying = speakingSession.retrying;
+  const shownPrompt = speakingSession.currentTask?.prompt || "";
+  try {
+    const result = await requestAIReply({
+      scenario: state.ai.scenario,
+      history: speakingHistory(),
+      message: content,
+      training: { mode: "speaking", phase, prompt: shownPrompt, retry: retrying }
+    });
+    if (result.provider) aiServiceInfo = { provider: result.provider, model: result.model || "", transport: result.transport || "backend" };
+    const feedback = meaningfulAIFeedback(result.feedback).slice(0, 2);
+    const reply = String(result.reply || "").trim();
+    speakingSession.latestFeedback = feedback;
+    speakingSession.latestReply = reply;
+    speakingSession.latestTranslation = String(result.translation || "").trim();
+    speakingSession.translationVisible = false;
+    speakingSession.turns.push({ phase, prompt: shownPrompt, answer: content, reply, typed, feedback, createdAt: new Date().toISOString() });
+    if (feedback.length) speakingSession.errors.push(...feedback.map((item) => ({ ...item, phase, createdAt: new Date().toISOString() })));
+    speakingSession.pending = false;
+    speakingSession.status = "ready";
+
+    if (!retrying && feedback[0]?.correction) {
+      speakingSession.retryTarget = feedback[0].correction;
+      speakingSession.retrying = true;
+      speakingSession.currentTask = {
+        prompt: `Please say the corrected sentence once:\n${feedback[0].correction}`,
+        keywords: feedback[0].correction,
+        skeleton: feedback[0].correction,
+        model: feedback[0].correction
+      };
+      speakingSession.statusMessage = "只重说这一句；完成后继续，不反复卡住。";
+      speakingSession.hintAvailable = true;
+      renderSpeakingSession();
+    } else {
+      speakingSession.retryTarget = "";
+      speakingSession.retrying = false;
+      speakingSession.statusMessage = typed ? "文字回答已记录；发音项保持空白。" : "这轮已完成。";
+      moveSpeakingTaskAfterAnswer(reply);
+    }
+    if (reply) void playSpeakingText(reply, 1).catch(() => {});
+    saveState();
+  } catch (error) {
+    speakingSession.pending = false;
+    speakingSession.status = "ready";
+    speakingSession.statusMessage = error.message || "AI 暂时没有完成纠错，请再试一次。";
+    renderSpeakingSession();
+  }
+}
+
+function speakSystemOnce(text, rate = 0.88) {
+  return new Promise((resolve) => {
+    if (!("speechSynthesis" in window) || !text) return resolve();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = state.settings.accent || "en-US";
+    utterance.rate = rate;
+    utterance.pitch = 0.96;
+    const voice = selectSystemEnglishVoice();
+    if (voice) utterance.voice = voice;
+    utterance.addEventListener("end", resolve, { once: true });
+    utterance.addEventListener("error", resolve, { once: true });
+    speechSynthesis.speak(utterance);
+  });
+}
+
+async function playSpeakingText(text, speed = 1) {
+  stopAITextSpeech(false);
+  if (speakingSession.referenceAudio) {
+    speakingSession.referenceAudio.pause();
+    speakingSession.referenceAudio.src = "";
+  }
+  if (speakingSession.referenceObjectUrl) URL.revokeObjectURL(speakingSession.referenceObjectUrl);
+  speakingSession.referenceAudio = null;
+  speakingSession.referenceObjectUrl = null;
+  const content = String(text || "").trim();
+  if (!content) return;
+  if (speed === "chunk") {
+    const chunks = content.split(/(?<=[,;:.!?])\s+/).filter(Boolean).slice(0, 8);
+    for (const chunk of chunks) {
+      await speakSystemOnce(chunk, 0.78);
+      await new Promise((resolve) => window.setTimeout(resolve, 260));
+    }
+    return;
+  }
+  if (naturalSpeechEnabled()) {
+    try {
+      const blob = await requestNaturalSpeech(content);
+      const objectUrl = URL.createObjectURL(blob);
+      const audio = new Audio(objectUrl);
+      audio.playbackRate = Number(speed) || 1;
+      speakingSession.referenceAudio = audio;
+      speakingSession.referenceObjectUrl = objectUrl;
+      await new Promise((resolve, reject) => {
+        const finish = () => {
+          if (speakingSession.referenceAudio === audio) speakingSession.referenceAudio = null;
+          if (speakingSession.referenceObjectUrl === objectUrl) speakingSession.referenceObjectUrl = null;
+          URL.revokeObjectURL(objectUrl);
+          resolve();
+        };
+        audio.addEventListener("ended", finish, { once: true });
+        audio.addEventListener("error", () => { finish(); reject(new Error("音频播放失败")); }, { once: true });
+        audio.play().catch(reject);
+      });
+      return;
+    } catch {}
+  }
+  await speakSystemOnce(content, speed === 0.8 ? 0.72 : 0.88);
+}
+
+async function finishSpeakingShadowAttempt(wav) {
+  const sentence = speakingSession.shadowSentence;
+  let recognized = "";
+  if (deviceAIConfig.apiKey) recognized = await requestCloudTranscription(wav).catch(() => "");
+  const textScore = recognized ? scoreTextMatch(sentence, recognized).score : null;
+  let acoustic;
+  try {
+    const reference = await getShadowingReferenceBlob(sentence);
+    acoustic = await comparePronunciationAudio(wav, reference);
+  } catch {
+    acoustic = await scoreStandaloneRhythm(wav, sentence);
+  }
+  const result = {
+    textScore,
+    rhythmScore: acoustic.rhythmScore,
+    score: combinedPronunciationScore({ textScore, soundScore: null, rhythmScore: acoustic.rhythmScore, sentence: true }),
+    recognized,
+    basic: true,
+    createdAt: new Date().toISOString()
+  };
+  speakingSession.shadowAttempts.push(result);
+  speakingSession.status = "ready";
+  speakingSession.statusMessage = speakingSession.shadowAttempts.length >= 3 ? "三次跟读已完成，已保留最好成绩。" : "已记录本次结果；你可以再试一次，或进入复盘。";
+  renderSpeakingSession();
+}
+
+async function finishSpeakingRecording(recorder, chunks, phase, aborted) {
+  if (speakingSession.mediaRecorder === recorder) speakingSession.mediaRecorder = null;
+  speakingSession.mediaStream?.getTracks().forEach((track) => track.stop());
+  speakingSession.mediaStream = null;
+  speakingSession.mediaChunks = [];
+  if (aborted || !speakingSession.active) return;
+  speakingSession.status = "processing";
+  speakingSession.statusMessage = phase === "shadowing" ? "正在计算基础跟读结果…" : "正在把语音转换成文字…";
+  renderSpeakingSession();
+  try {
+    const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    if (!recorded.size) throw new Error("没有录到声音，请重新说一次。" );
+    const wav = await convertRecordingToWav(recorded);
+    if (phase === "shadowing") await finishSpeakingShadowAttempt(wav);
+    else {
+      if (!deviceAIConfig.apiKey) throw new Error("当前录音识别需要智谱 API Key；也可以使用下方文字输入。" );
+      const content = await requestCloudTranscription(wav);
+      speakingSession.status = "ready";
+      await submitSpeakingAnswer(content, false);
+    }
+  } catch (error) {
+    speakingSession.status = "ready";
+    speakingSession.statusMessage = error.message || "没有识别到清晰语音，请重试。";
+    renderSpeakingSession();
+  }
+}
+
+async function startSpeakingMediaRecording(phase) {
+  if (!navigator.mediaDevices?.getUserMedia || !("MediaRecorder" in window)) throw new Error("当前浏览器不支持录音，请使用最新版 Chrome 并允许麦克风。" );
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  if (!speakingSession.active) {
+    stream.getTracks().forEach((track) => track.stop());
+    return;
+  }
+  const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const chunks = [];
+  speakingSession.mediaRecorder = recorder;
+  speakingSession.mediaStream = stream;
+  speakingSession.mediaChunks = chunks;
+  speakingSession.abortRecording = false;
+  speakingSession.status = "recording";
+  speakingSession.statusMessage = phase === "shadowing" ? "正在跟读；说完后点击停止。" : "正在听你回答；说完后点击停止。";
+  recorder.addEventListener("dataavailable", (event) => { if (event.data?.size) chunks.push(event.data); });
+  recorder.addEventListener("stop", () => {
+    const aborted = speakingSession.abortRecording;
+    speakingSession.abortRecording = false;
+    void finishSpeakingRecording(recorder, chunks, phase, aborted);
+  }, { once: true });
+  recorder.start(250);
+  speakingSession.stopTimer = window.setTimeout(() => stopSpeakingRecording(false), phase === "shadowing" ? 30000 : 60000);
+  renderSpeakingSession();
+}
+
+function startSpeakingBrowserRecognition() {
+  const Recognition = speechRecognitionConstructor();
+  if (!Recognition) throw new Error("当前浏览器不支持免费语音识别，请使用下方文字回答或在设置中选择云识别。" );
+  const recognition = new Recognition();
+  let finalText = "";
+  speakingSession.recognition = recognition;
+  speakingSession.status = "recording";
+  speakingSession.statusMessage = "正在听你回答；说完后停顿一下。";
+  recognition.lang = state.settings.accent || "en-US";
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  recognition.addEventListener("result", (event) => {
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      if (event.results[index].isFinal) finalText += ` ${event.results[index][0]?.transcript || ""}`;
+    }
+  });
+  recognition.addEventListener("error", (event) => {
+    if (event.error === "aborted") return;
+    speakingSession.status = "ready";
+    speakingSession.statusMessage = event.error === "not-allowed" ? "没有麦克风权限，请在网站设置中允许。" : "没有听清，请再试一次。";
+    renderSpeakingSession();
+  });
+  recognition.addEventListener("end", () => {
+    if (speakingSession.recognition === recognition) speakingSession.recognition = null;
+    speakingSession.status = "ready";
+    const content = finalText.trim();
+    if (content) void submitSpeakingAnswer(content, false);
+    else renderSpeakingSession();
+  });
+  recognition.start();
+  renderSpeakingSession();
+}
+
+function stopSpeakingRecording(abort = false) {
+  clearTimeout(speakingSession.stopTimer);
+  speakingSession.stopTimer = null;
+  if (speakingSession.mediaRecorder) {
+    speakingSession.abortRecording = abort;
+    try { if (speakingSession.mediaRecorder.state !== "inactive") speakingSession.mediaRecorder.stop(); } catch {}
+    return;
+  }
+  const recognition = speakingSession.recognition;
+  try { abort ? recognition?.abort() : recognition?.stop(); } catch {}
+}
+
+function toggleSpeakingRecording() {
+  if (!speakingSession.active || speakingSession.pending) return;
+  if (speakingSession.status === "recording") return stopSpeakingRecording(false);
+  const phase = speakingPhase().id;
+  if (phase === "shadowing") {
+    void startSpeakingMediaRecording(phase).catch((error) => {
+      speakingSession.status = "ready";
+      speakingSession.statusMessage = error.message || "无法启动跟读录音。";
+      renderSpeakingSession();
+    });
+    return;
+  }
+  if (deviceAIConfig.speechInput === "browser") {
+    try { startSpeakingBrowserRecognition(); }
+    catch (error) {
+      speakingSession.status = "ready";
+      speakingSession.statusMessage = error.message || "无法启动语音识别。";
+      renderSpeakingSession();
+    }
+    return;
+  }
+  void startSpeakingMediaRecording(phase).catch((error) => {
+    speakingSession.status = "ready";
+    speakingSession.statusMessage = error.message || "无法启动录音。";
+    renderSpeakingSession();
+  });
+}
+
 async function submitVoiceTurn(content) {
   if (!voiceSession.active || aiPending) return;
   const messages = currentAISession();
@@ -4528,7 +5201,110 @@ async function submitVoiceTurn(content) {
   }
 }
 
-function startVoiceConversation() {
+function doubaoVoiceInstructions() {
+  const current = AI_SCENARIOS[state.ai.scenario] || AI_SCENARIOS.campus;
+  return `You are 蘑菇酱, a patient English speaking partner for one Chinese CET-4 learner around B1 level. Current scenario: ${current.title}. Goal: ${current.goal}. Speak mainly in clear, natural English. Keep each turn to 2–3 short sentences and no more than 45 English words. End with one short useful follow-up question. If the learner uses Chinese, briefly help them say the idea in English. Do not lecture, do not announce corrections, and do not speak Chinese unless the learner is stuck.`;
+}
+
+async function enrichDoubaoVoiceTurn(userText, replyText, assistantMessage) {
+  if (aiServiceStatus !== "ready" || !userText || !replyText) return;
+  try {
+    const messages = currentAISession();
+    const history = messages.slice(-12, -2).map(({ role, content }) => ({ role, content }));
+    const result = await requestAIReply({
+      scenario: state.ai.scenario,
+      history,
+      message: userText,
+      training: { mode: "voice-review", assistantReply: replyText }
+    });
+    if (!messages.includes(assistantMessage)) return;
+    assistantMessage.translation = String(result.translation || "").trim();
+    assistantMessage.feedback = meaningfulAIFeedback(result.feedback).slice(0, 2);
+    assistantMessage.vocabulary = Array.isArray(result.vocabulary) ? result.vocabulary.slice(0, 2) : [];
+    saveState();
+    renderAI();
+  } catch {}
+}
+
+function saveDoubaoVoiceTurn() {
+  const userText = String(voiceSession.doubaoUserText || "").trim();
+  const replyText = String(voiceSession.doubaoReplyText || "").trim();
+  if (!userText || !replyText || voiceSession.doubaoTurnSaved) return;
+  voiceSession.doubaoTurnSaved = true;
+  const messages = currentAISession();
+  messages.push({ role: "user", content: userText, createdAt: new Date().toISOString() });
+  const assistantMessage = { role: "assistant", content: replyText, translation: "", feedback: [], vocabulary: [], createdAt: new Date().toISOString() };
+  messages.push(assistantMessage);
+  if (messages.length > 40) messages.splice(1, messages.length - 40);
+  voiceSession.transcript = `你：${userText}\nAI：${replyText}`;
+  saveState();
+  renderAI();
+  void enrichDoubaoVoiceTurn(userText, replyText, assistantMessage);
+  voiceSession.doubaoUserText = "";
+  voiceSession.doubaoReplyText = "";
+  voiceSession.doubaoTurnSaved = false;
+}
+
+async function startDoubaoVoiceConversation() {
+  if (!syncConfig.endpoint || !syncConfig.token || !window.DoubaoRealtimeClient) return false;
+  closeVoiceResources();
+  voiceSession.active = true;
+  voiceSession.state = "connecting";
+  voiceSession.transcript = "";
+  const client = new window.DoubaoRealtimeClient({
+    endpoint: syncConfig.endpoint,
+    token: syncConfig.token,
+    systemRole: doubaoVoiceInstructions(),
+    speakingStyle: "Speak warm, clear English at a calm pace suitable for a B1 learner. Keep natural pauses and never rush.",
+    handlers: {
+      state(value) {
+        if (voiceSession.doubao !== client || !voiceSession.active) return;
+        voiceSession.state = value;
+        renderVoiceUI();
+      },
+      asr(text, final) {
+        if (voiceSession.doubao !== client) return;
+        voiceSession.doubaoUserText = text;
+        if (final) voiceSession.doubaoTurnSaved = false;
+        voiceSession.transcript = `你：${text}\nAI：${voiceSession.doubaoReplyText || "…"}`;
+        renderVoiceUI();
+      },
+      chat(content) {
+        if (voiceSession.doubao !== client) return;
+        const current = voiceSession.doubaoReplyText;
+        voiceSession.doubaoReplyText = content.startsWith(current) ? content : `${current}${content}`;
+        voiceSession.transcript = `你：${voiceSession.doubaoUserText || "…"}\nAI：${voiceSession.doubaoReplyText}`;
+        renderVoiceUI();
+      },
+      turnEnd() {
+        if (voiceSession.doubao === client) saveDoubaoVoiceTurn();
+      },
+      error(error) {
+        if (voiceSession.doubao === client && client.ready) failVoiceSession("豆包实时语音已断开", error.message || "请重新开始语音练习。" );
+      }
+    }
+  });
+  voiceSession.doubao = client;
+  renderVoiceUI();
+  try {
+    await client.connect();
+    return true;
+  } catch (error) {
+    if (voiceSession.doubao === client) closeVoiceResources();
+    voiceSession.active = false;
+    voiceSession.state = "idle";
+    throw error;
+  }
+}
+
+async function startVoiceConversation() {
+  if (syncConfig.endpoint && syncConfig.token && window.DoubaoRealtimeClient) {
+    try {
+      if (await startDoubaoVoiceConversation()) return;
+    } catch (error) {
+      toast("豆包语音暂未接通", `${error.message || "实时连接失败"}；本次自动改用原有语音模式。`);
+    }
+  }
   if (aiServiceStatus !== "ready") {
     return failVoiceSession("AI 尚未就绪", "请先在设置中配置手机 AI，或在电脑上启动本机服务。" );
   }
@@ -4559,7 +5335,8 @@ function stopVoiceImmediately(shouldRender = true) {
 }
 
 function toggleVoiceConversation() {
-  if (!isVoiceActive()) return startVoiceConversation();
+  if (!isVoiceActive()) return void startVoiceConversation();
+  if (voiceSession.doubao) return finishVoiceConversation();
   if (voiceSession.mediaRecorder && voiceSession.state === "listening") return stopCloudVoiceTurn(false);
   finishVoiceConversation();
 }
@@ -5176,6 +5953,30 @@ function bindEvents() {
   $("#aiDictation").addEventListener("click", toggleTextDictation);
   $("#aiVoiceToggle").addEventListener("click", toggleVoiceConversation);
   $("#aiVoiceEnd").addEventListener("click", finishVoiceConversation);
+  $("#speakingStart").addEventListener("click", startSpeakingSession);
+  $("#speakingRecord").addEventListener("click", toggleSpeakingRecording);
+  $("#speakingHint").addEventListener("click", revealSpeakingHint);
+  $("#speakingNext").addEventListener("click", advanceSpeakingPhase);
+  $("#speakingFinish").addEventListener("click", finishSpeakingSession);
+  $("#speakingTypeForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = $("#speakingTypeInput");
+    const content = input.value.trim();
+    if (!content) return;
+    input.value = "";
+    void submitSpeakingAnswer(content, true);
+  });
+  $("#speakingFeedback").addEventListener("click", (event) => {
+    if (!event.target.closest("[data-speaking-translation]")) return;
+    speakingSession.translationVisible = !speakingSession.translationVisible;
+    renderSpeakingSession();
+  });
+  $("#speakingShadowResult").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-speaking-play]");
+    if (!button) return;
+    const value = button.dataset.speakingPlay;
+    void playSpeakingText(speakingSession.shadowSentence, value === "chunk" ? "chunk" : Number(value) || 1);
+  });
   $("#aiWritingType").addEventListener("change", updateWritingLabels);
   $("#aiGenerateTranslation").addEventListener("click", () => { void generateTranslationPrompt(); });
   $("#aiWritingSubmit").addEventListener("click", () => { void submitWritingReview(); });
@@ -5253,7 +6054,7 @@ function bindEvents() {
       rateCurrentWord({ "1": "unknown", "2": "fuzzy", "3": "known" }[event.key]);
     }
   });
-  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopWordPronunciationAssessment(true, false); stopAITextSpeech(false); stopTextDictation(true); stopShadowing(true, false); stopVoiceImmediately(false); persistState(); });
+  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopWordPronunciationAssessment(true, false); stopAITextSpeech(false); stopTextDictation(true); stopShadowing(true, false); stopVoiceImmediately(false); stopSpeakingResources(true); clearInterval(speakingSession.interval); persistState(); });
   window.addEventListener("online", () => scheduleCloudSync(100));
   window.addEventListener("offline", () => setSyncStatus("offline", "当前离线，记录已安全保存在本机"));
   document.addEventListener("visibilitychange", () => {
@@ -5364,7 +6165,7 @@ async function init() {
   checkAIStatus();
   renderVoices();
   if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", renderVoices);
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=58", { updateViaCache: "none" }).catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js?v=60", { updateViaCache: "none" }).catch(() => {});
   registerWebMCP();
   warnTemporaryStorageScope();
   window.setTimeout(checkBackupReminder, 900);

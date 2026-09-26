@@ -1,5 +1,9 @@
 const MAX_STATE_BYTES = 1_800_000;
 const MAX_AUDIO_BYTES = 2_500_000;
+const DOUBAO_DIALOGUE_URL = "https://openspeech.bytedance.com/api/v3/realtime/dialogue";
+const DOUBAO_RESOURCE_ID = "volc.speech.dialog";
+const DOUBAO_APP_KEY = "PlgvMymc7f3tQnJ6";
+const VOICE_TICKET_LIFETIME_SECONDS = 45;
 const DEFAULT_ORIGINS = [
   "https://maiguojun.github.io",
   "http://127.0.0.1:4174",
@@ -65,6 +69,98 @@ async function authorized(request, env) {
     difference |= (left[index] || 0) ^ (right[index] || 0);
   }
   return difference === 0;
+}
+
+function base64UrlEncode(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlDecode(value) {
+  const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+async function voiceTicketSignature(payload, env) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(String(env.SYNC_SECRET || "")),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, payload));
+}
+
+async function createVoiceTicket(env) {
+  const payload = new TextEncoder().encode(JSON.stringify({
+    exp: Math.floor(Date.now() / 1000) + VOICE_TICKET_LIFETIME_SECONDS,
+    nonce: crypto.randomUUID()
+  }));
+  const signature = await voiceTicketSignature(payload, env);
+  return `${base64UrlEncode(payload)}.${base64UrlEncode(signature)}`;
+}
+
+async function validVoiceTicket(ticket, env) {
+  try {
+    const [payloadPart, signaturePart, extra] = String(ticket || "").split(".");
+    if (!payloadPart || !signaturePart || extra || !env.SYNC_SECRET) return false;
+    const payload = base64UrlDecode(payloadPart);
+    const provided = base64UrlDecode(signaturePart);
+    const expected = await voiceTicketSignature(payload, env);
+    if (provided.length !== expected.length) return false;
+    let difference = 0;
+    for (let index = 0; index < expected.length; index += 1) difference |= expected[index] ^ provided[index];
+    if (difference) return false;
+    const claims = JSON.parse(new TextDecoder().decode(payload));
+    const now = Math.floor(Date.now() / 1000);
+    return Number.isFinite(claims?.exp) && claims.exp >= now && claims.exp <= now + VOICE_TICKET_LIFETIME_SECONDS + 5;
+  } catch {
+    return false;
+  }
+}
+
+function doubaoConfigured(env) {
+  return Boolean(String(env.DOUBAO_APP_ID || "").trim() && String(env.DOUBAO_ACCESS_TOKEN || "").trim());
+}
+
+async function issueVoiceSession(request, env) {
+  if (!doubaoConfigured(env)) return json(request, env, 503, { error: "豆包实时语音尚未配置" });
+  const ticket = await createVoiceTicket(env);
+  const url = new URL(request.url);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/doubao-realtime";
+  url.search = new URLSearchParams({ ticket }).toString();
+  return json(request, env, 200, {
+    websocketUrl: url.toString(),
+    expiresIn: VOICE_TICKET_LIFETIME_SECONDS,
+    provider: "doubao-s2s-omni"
+  });
+}
+
+async function proxyDoubaoRealtime(request, env, url) {
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    return json(request, env, 426, { error: "Expected WebSocket upgrade" });
+  }
+  if (!doubaoConfigured(env)) return json(request, env, 503, { error: "豆包实时语音尚未配置" });
+  if (!await validVoiceTicket(url.searchParams.get("ticket"), env)) {
+    return json(request, env, 401, { error: "语音连接票据无效或已过期" });
+  }
+  const upstream = await fetch(DOUBAO_DIALOGUE_URL, {
+    headers: {
+      Upgrade: "websocket",
+      "X-Api-App-ID": String(env.DOUBAO_APP_ID).trim(),
+      "X-Api-Access-Key": String(env.DOUBAO_ACCESS_TOKEN).trim(),
+      "X-Api-Resource-Id": DOUBAO_RESOURCE_ID,
+      "X-Api-App-Key": DOUBAO_APP_KEY,
+      "X-Api-Connect-Id": crypto.randomUUID()
+    }
+  });
+  if (!upstream.webSocket) return json(request, env, 502, { error: "豆包实时语音连接失败" });
+  return upstream;
 }
 
 function parseRow(row) {
@@ -377,9 +473,11 @@ export default {
 
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") {
-      return json(request, env, 200, { ok: true, service: "mogu-cet4-sync", azureSpeech: Boolean(azureSpeechRegion(env) && env.AZURE_SPEECH_KEY) });
+      return json(request, env, 200, { ok: true, service: "mogu-cet4-sync", azureSpeech: Boolean(azureSpeechRegion(env) && env.AZURE_SPEECH_KEY), doubaoVoice: doubaoConfigured(env) });
     }
+    if (url.pathname === "/doubao-realtime") return proxyDoubaoRealtime(request, env, url);
     if (!await authorized(request, env)) return json(request, env, 401, { error: "同步密码不正确" });
+    if (url.pathname === "/voice-session" && request.method === "POST") return issueVoiceSession(request, env);
     if (url.pathname === "/word-audio" && request.method === "GET") return handleWordAudio(request, env, url);
     if (url.pathname === "/pronunciation-assessment" && request.method === "POST") return handlePronunciationAssessment(request, env, url);
     if (url.pathname !== "/sync") return json(request, env, 404, { error: "Not found" });

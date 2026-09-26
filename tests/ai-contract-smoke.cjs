@@ -3,6 +3,8 @@ const fs = require("node:fs");
 const app = fs.readFileSync("dist/app.js", "utf8");
 const html = fs.readFileSync("dist/index.html", "utf8");
 const server = fs.readFileSync("server.mjs", "utf8");
+const doubao = fs.readFileSync("dist/doubao-realtime.js", "utf8");
+const worker = fs.readFileSync("cloudflare/src/worker.mjs", "utf8");
 
 const requireText = (source, text, label) => {
   if (!source.includes(text)) throw new Error(`Missing ${label}: ${text}`);
@@ -57,6 +59,28 @@ requireText(html, 'class="word-pronunciation-practice"', "fixed word pronunciati
 requireText(app, "settleWithin(getPronunciationClip(text), 7000, null)", "mobile pronunciation timeout fallback");
 requireText(app, "中文提示：${primaryTestMeaning(currentWord)}", "audio quiz Chinese meaning hint");
 requireText(app, "const canTranslate = Boolean(latest?.translation)", "always-available voice translation control");
-requireText(html, "app.js?v=58", "v58 script cache bust");
+requireText(html, 'data-ai-mode="speaking"', "dedicated speaking mode");
+requireText(html, 'id="aiSpeakingPanel"', "15-minute speaking panel");
+requireText(html, 'id="speakingPhaseTrack"', "speaking phase progress");
+requireText(html, 'id="speakingTypeForm"', "speaking typed fallback");
+requireText(app, "const SPEAKING_PHASES", "structured speaking phases");
+requireText(app, "totalActiveSeconds", "active speaking timer");
+requireText(app, "if (!speakingSession.active || speakingSession.pending || speakingSession.status === \"processing\") return", "paused AI wait time");
+requireText(app, 'training: { mode: "speaking", phase, prompt: shownPrompt, retry: retrying }', "speaking training request context");
+requireText(app, "speakingSession.conversationTurns >= 6", "six-turn scenario target");
+requireText(app, "speakingSession.shadowAttempts.length >= 3", "three-attempt shadowing limit");
+requireText(app, "这里不会把普通语音识别冒充音素评分", "honest shadowing score label");
+requireText(app, "data-speaking-translation", "collapsed speaking translation");
+requireText(server, 'body.training?.mode === "speaking"', "backend speaking contract");
+requireText(app, 'training: { mode: "voice-review", assistantReply: replyText }', "voice-turn Zhipu review");
+requireText(app, "startDoubaoVoiceConversation", "Doubao real-time voice preference");
+requireText(doubao, "class DoubaoRealtimeClient", "Doubao browser client");
+requireText(doubao, "downsampleToPcm16", "16 kHz PCM microphone stream");
+requireText(doubao, "EVENTS.TTS_RESPONSE", "streaming Doubao audio playback");
+requireText(worker, 'url.pathname === "/voice-session"', "short-lived Doubao voice ticket");
+requireText(worker, 'url.pathname === "/doubao-realtime"', "Doubao WebSocket gateway");
+requireText(worker, '"X-Api-Access-Key"', "server-side Doubao credentials");
+requireText(html, "doubao-realtime.js?v=60", "v60 Doubao client cache bust");
+requireText(html, "app.js?v=60", "v60 script cache bust");
 
 console.log("AI contract smoke test passed");

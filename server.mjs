@@ -450,6 +450,15 @@ Return only valid JSON: {"title":"short Chinese title","source":"Chinese paragra
 
   const message = typeof body.message === "string" ? body.message.trim() : "";
   const scenario = SCENARIOS[body.scenario] ? body.scenario : "campus";
+  const training = body.training?.mode === "speaking" ? {
+    mode: "speaking",
+    phase: String(body.training.phase || "conversation").slice(0, 40),
+    prompt: String(body.training.prompt || "").slice(0, 500),
+    retry: Boolean(body.training.retry)
+  } : body.training?.mode === "voice-review" ? {
+    mode: "voice-review",
+    assistantReply: String(body.training.assistantReply || "").slice(0, 900)
+  } : null;
   if (!message || message.length > 1000) return json(response, 400, { error: "请输入 1–1000 个字符后再发送。" });
   const history = Array.isArray(body.history) ? body.history.slice(-12).flatMap((item) => {
     const role = item?.role === "assistant" ? "assistant" : item?.role === "user" ? "user" : null;
@@ -457,13 +466,14 @@ Return only valid JSON: {"title":"short Chinese title","source":"Chinese paragra
     return role && content ? [{ role, content }] : [];
   }) : [];
 
-  const instructions = `You are the private English tutor inside 蘑菇酱四级 for one Chinese learner preparing for CET-4 and aiming for 500+. The learner is around B1 and wants practical conversation plus gentle correction. The current scenario is ${SCENARIOS[scenario]}.
+  const speakingRules = training?.mode === "speaking" ? ` This is a structured speaking lesson. Phase: ${training.phase}. Retry turn: ${training.retry}. The prompt shown to the learner was: ${training.prompt}. Respond naturally first, then ask exactly one short follow-up question unless this is a retry. Use 2–3 short sentences and no more than 45 English words. Correct at most TWO important issues, prioritizing meaning, completeness/naturalness, key grammar, then pronunciation-friendly phrasing. If this is a retry, briefly acknowledge it and do not introduce a new topic. Do not claim to hear pronunciation; the app evaluates audio separately.` : training?.mode === "voice-review" ? ` This is a post-processing pass for a completed real-time voice turn. The voice model already replied with exactly: ${training.assistantReply}. Do not create a different answer or another question. Put that exact English voice reply in the reply field, translate that exact reply into Chinese, and correct at most TWO important errors in the learner's message. Do not claim to hear pronunciation; only the transcript is available.` : "";
+  const instructions = `You are the private English tutor inside 蘑菇酱四级 for one Chinese learner preparing for CET-4 and aiming for 500+. The learner is around B1 and wants practical conversation plus gentle correction. The current scenario is ${SCENARIOS[scenario]}.${speakingRules}
 
-Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as "Ask:" or "Question:".
+Keep the conversation natural and encouraging, but do not give empty praise. Reply mainly in simple, natural English suitable for CET-4. If the learner writes Chinese, help them express that idea in English and continue the conversation. ${training?.mode === "speaking" ? "Follow the stricter structured-lesson response limits above." : training?.mode === "voice-review" ? "Follow the voice-turn post-processing rule above exactly." : "Use two to four short sentences, keep the reply under 70 English words, and end directly with exactly one useful follow-up question. Do not introduce the question with labels such as Ask: or Question:."}
 
 The app supports voice: it displays your English reply and a separate text-to-speech service reads that exact reply aloud. Never claim that you are text-only, that the app has no voice, or that spoken output is a separate answer. If asked about voice, explain this accurately and briefly.
 
-Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence that contains an actual error","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Feedback must contain only sentences that genuinely need correction; omit natural/correct sentences completely, and return an empty feedback array when there is no error. Include at most eight feedback items and two vocabulary items.`;
+Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence that contains an actual error","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Feedback must contain only sentences that genuinely need correction; omit natural/correct sentences completely, and return an empty feedback array when there is no error. Include at most ${training ? "two" : "eight"} feedback items and two vocabulary items.`;
 
   const messages = [{ role: "system", content: instructions }, ...history, { role: "user", content: message }];
   const failures = [];

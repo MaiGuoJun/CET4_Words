@@ -16,6 +16,8 @@
 - 三篇可离线使用的 VOA Learning English 精听材料；
 - 本地音频导入、原文显隐、变速和 A–B 循环；
 - 电脑使用智谱在线 AI + Ollama 本地备用，手机可从 GitHub Pages 直连智谱，支持情景对话、回复朗读、语法纠错、四级词汇提示和语音练习；
+- 独立的 15 分钟口语训练：2 分钟英语热身、4 分钟中译英、5 分钟六轮情景对话、3 分钟针对性跟读和 1 分钟复盘；AI 等待时暂停有效计时，8 秒后逐级显示关键词、句型骨架和参考表达；
+- 语音对话可通过 Cloudflare 安全接入豆包 S2S-Omni 实时语音：网页只取得 45 秒短时连接票据，App ID 与 Access Token 不进入浏览器、学习记录或 Git；豆包未配置或连接失败时自动回退到原有语音模式；
 - 手机文字和语音对话均支持 GLM-ASR 云端语音输入；AI 回复可按需展开中文翻译，并优先使用 GLM-TTS，自然语音额度不可用或连接超时时自动切换到较慢的设备英语声音；
 - 四级段落翻译可由 AI 按真题题型生成原创中文材料，支持中国文化、社会生活、科技教育和绿色发展主题；提交英文译文后再显示评分、修改稿与逐项纠错；
 - 单词卡固定提供“听标准音 → 跟读纠音”，手机获取真人录音超时后自动改用设备英语声音，不会一直停在加载状态；
@@ -88,8 +90,12 @@ npx wrangler d1 create mogu-cet4-sync
 ```powershell
 npx wrangler d1 execute mogu-cet4-sync --remote --file schema.sql
 npx wrangler secret put SYNC_SECRET
+npx wrangler secret put DOUBAO_APP_ID
+npx wrangler secret put DOUBAO_ACCESS_TOKEN
 npx wrangler deploy
 ```
+
+`DOUBAO_APP_ID` 和 `DOUBAO_ACCESS_TOKEN` 来自火山引擎豆包语音控制台中已开通的“端到端实时语音大模型”应用。两项都应作为 Worker Secret 填写，不要粘贴到网页、源代码或聊天中。只配置 `SYNC_SECRET` 时，学习同步仍正常，语音对话会自动使用原有智谱/浏览器方案。
 
 部署完成后，在应用设置页填写 Workers 地址和同一个同步密码。手机与电脑各连接一次即可。请使用至少 12 位且不与其他账号共用的密码。
 

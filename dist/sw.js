@@ -1,8 +1,9 @@
-const CACHE = "mogu-cet4-v58";
+const CACHE = "mogu-cet4-v60";
 const CORE = [
   "./",
   "./index.html",
   "./styles.css",
+  "./doubao-realtime.js",
   "./app.js",
   "./manifest.webmanifest",
   "./icon.svg",
