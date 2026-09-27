@@ -148,6 +148,12 @@ const SPEAKING_TRANSLATION_TASKS = [
   { prompt: "科技能提高学习效率，但我们也需要避免过度依赖它。", keywords: "improve efficiency · avoid · depend too much on", skeleton: "Technology can ..., but we also need to ...", model: "Technology can improve learning efficiency, but we also need to avoid depending on it too much." }
 ];
 
+const SPEAKING_BASELINE_SENTENCES = [
+  "I usually review new words in the library because the quiet environment helps me concentrate.",
+  "Although I sometimes pause to organize my thoughts, I can still express my main idea clearly in English.",
+  "Technology makes learning more convenient, but students should also develop the ability to think independently."
+];
+
 const defaultDoubaoBudget = () => ({
   totalTokens: 1000000,
   estimatedRemaining: 998000,
@@ -158,7 +164,7 @@ const defaultDoubaoBudget = () => ({
   sessionMinuteLimit: 5,
   sessions: []
 });
-const defaultAIState = () => ({ scenario: "campus", mode: "text", sessions: {}, writingReviews: [], speakingSessions: [], doubaoBudget: defaultDoubaoBudget() });
+const defaultAIState = () => ({ scenario: "campus", mode: "text", sessions: {}, writingReviews: [], speakingSessions: [], speakingBaseline: null, doubaoBudget: defaultDoubaoBudget() });
 const defaultVocabAssessment = () => ({
   status: "idle",
   version: 1,
@@ -272,6 +278,18 @@ let voiceSession = {
   transcript: ""
 };
 let speakingSession = freshSpeakingSession();
+let speakingBaselineSession = {
+  active: false,
+  index: 0,
+  results: [],
+  status: "idle",
+  mediaRecorder: null,
+  mediaStream: null,
+  mediaChunks: [],
+  stopTimer: null,
+  abortRecording: false,
+  latestResult: null
+};
 let textDictation = {
   recognition: null,
   mediaRecorder: null,
@@ -351,6 +369,7 @@ function normalizeState(parsed) {
       sessions: { ...(parsed.ai?.sessions || {}) },
       writingReviews: Array.isArray(parsed.ai?.writingReviews) ? parsed.ai.writingReviews : [],
       speakingSessions: Array.isArray(parsed.ai?.speakingSessions) ? parsed.ai.speakingSessions.slice(0, 30) : [],
+      speakingBaseline: parsed.ai?.speakingBaseline && typeof parsed.ai.speakingBaseline === "object" ? parsed.ai.speakingBaseline : null,
       doubaoBudget: {
         ...defaultDoubaoBudget(),
         ...(parsed.ai?.doubaoBudget || {}),
@@ -2852,6 +2871,7 @@ function freshSpeakingSession() {
     abortRecording: false,
     shadowSentence: "",
     shadowAttempts: [],
+    latestRecordingId: "",
     referenceAudio: null,
     referenceObjectUrl: null
   };
@@ -3009,6 +3029,7 @@ function finishSpeakingSession() {
   speakingSession.phaseIndex = SPEAKING_PHASES.length - 1;
   speakingSession.currentTask = { prompt: "今天的有效练习已经完成。看看哪些表达正在变得更自然。", keywords: "", skeleton: "", model: "" };
   const bestShadow = Math.max(0, ...speakingSession.shadowAttempts.map((item) => Number(item.score) || 0));
+  const bestShadowAttempt = [...speakingSession.shadowAttempts].sort((left, right) => (right.score || 0) - (left.score || 0))[0] || null;
   state.ai.speakingSessions ||= [];
   state.ai.speakingSessions.unshift({
     startedAt: speakingSession.startedAt,
@@ -3017,6 +3038,8 @@ function finishSpeakingSession() {
     turns: speakingSession.turns.length,
     errors: speakingSession.errors.slice(0, 8),
     bestShadow,
+    bestShadowParts: bestShadowAttempt ? { textScore: bestShadowAttempt.textScore, soundScore: bestShadowAttempt.soundScore, rhythmScore: bestShadowAttempt.rhythmScore } : null,
+    recordingId: bestShadowAttempt?.recordingId || speakingSession.latestRecordingId || "",
     scenario: state.ai.scenario
   });
   state.ai.speakingSessions = state.ai.speakingSessions.slice(0, 30);
@@ -3094,7 +3117,7 @@ function renderSpeakingShadowing() {
   container.innerHTML = `
     <p><b>目标句：</b>${escapeHtml(speakingSession.shadowSentence)}</p>
     <div class="speaking-shadow-actions"><button type="button" data-speaking-play="1">▶ 正常语速</button><button type="button" data-speaking-play="0.8">▶ 0.8 倍</button><button type="button" data-speaking-play="chunk">▶ 意群播放</button></div>
-    ${best ? `<div class="score"><strong>${best.score}</strong><span>基础跟读分 · 最好成绩</span></div><p>内容 ${best.textScore ?? "—"} · 节奏 ${best.rhythmScore ?? "—"} · 尝试 ${speakingSession.shadowAttempts.length}/3</p>` : `<p>尚未跟读；这里不会把普通语音识别冒充音素评分。</p>`}`;
+    ${best ? `<div class="score"><strong>${best.score}</strong><span>综合跟读分 · 最好成绩</span></div><p>内容 ${best.textScore ?? "—"} · 发音相似度 ${best.soundScore ?? "—"} · 节奏 ${best.rhythmScore ?? "—"} · 尝试 ${speakingSession.shadowAttempts.length}/3</p>` : `<p>尚未跟读；这里不会把普通语音识别冒充音素评分，会分别显示内容、声学相似度和节奏。</p>`}`;
 }
 
 function renderSpeakingSession() {
@@ -3136,6 +3159,163 @@ function renderSpeakingSession() {
   $("#speakingStatus").textContent = speakingSession.pending ? "AI 正在回应并检查关键错误，计时已暂停。" : speakingSession.statusMessage;
 }
 
+function stopSpeakingBaselineRecording(abort = false) {
+  clearTimeout(speakingBaselineSession.stopTimer);
+  speakingBaselineSession.stopTimer = null;
+  if (!speakingBaselineSession.mediaRecorder) return;
+  speakingBaselineSession.abortRecording = abort;
+  try { if (speakingBaselineSession.mediaRecorder.state !== "inactive") speakingBaselineSession.mediaRecorder.stop(); } catch {}
+}
+
+function speakingAverage(results, field) {
+  const values = results.map((item) => Number(item?.[field])).filter(Number.isFinite);
+  return values.length ? Math.round(values.reduce((total, value) => total + value, 0) / values.length) : null;
+}
+
+function completeSpeakingBaseline() {
+  const results = speakingBaselineSession.results;
+  const summary = {
+    completedAt: new Date().toISOString(),
+    score: speakingAverage(results, "score"),
+    textScore: speakingAverage(results, "textScore"),
+    soundScore: speakingAverage(results, "soundScore"),
+    rhythmScore: speakingAverage(results, "rhythmScore"),
+    firstRecordingId: results[0]?.recordingId || "",
+    results: results.map((item) => ({ ...item }))
+  };
+  state.ai.speakingBaseline = summary;
+  speakingBaselineSession.active = false;
+  speakingBaselineSession.status = "complete";
+  saveState();
+  renderSpeakingBaseline();
+  renderSpeakingWeeklyReport();
+  toast("口语基线已建立", `综合基线 ${summary.score ?? "—"} 分，之后的每周报告会与它比较。`);
+}
+
+async function finishSpeakingBaselineRecording(recorder, chunks, aborted) {
+  if (speakingBaselineSession.mediaRecorder === recorder) speakingBaselineSession.mediaRecorder = null;
+  speakingBaselineSession.mediaStream?.getTracks().forEach((track) => track.stop());
+  speakingBaselineSession.mediaStream = null;
+  speakingBaselineSession.mediaChunks = [];
+  if (aborted || !speakingBaselineSession.active) return renderSpeakingBaseline();
+  speakingBaselineSession.status = "processing";
+  renderSpeakingBaseline();
+  const sentence = SPEAKING_BASELINE_SENTENCES[speakingBaselineSession.index];
+  try {
+    const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    if (!recorded.size) throw new Error("没有录到声音，请重新试一次。" );
+    const wav = await convertRecordingToWav(recorded);
+    const [recognized, acoustic] = await Promise.all([
+      deviceAIConfig.apiKey ? requestCloudTranscription(wav).catch(() => "") : Promise.resolve(""),
+      getShadowingReferenceBlob(sentence).then((reference) => comparePronunciationAudio(wav, reference)).catch(() => scoreStandaloneRhythm(wav, sentence))
+    ]);
+    const textScore = recognized ? scoreTextMatch(sentence, recognized).score : null;
+    const recordingId = `baseline:${activeCourse()}:${Date.now()}:${speakingBaselineSession.index}`;
+    await saveSpeakingRecording(recordingId, wav, { kind: "baseline", sentence }).catch(() => {});
+    const result = {
+      sentence,
+      recordingId,
+      recognized,
+      textScore,
+      soundScore: acoustic.soundScore ?? null,
+      rhythmScore: acoustic.rhythmScore ?? null,
+      score: combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore, sentence: true }),
+      createdAt: new Date().toISOString()
+    };
+    speakingBaselineSession.results[speakingBaselineSession.index] = result;
+    speakingBaselineSession.latestResult = result;
+    speakingBaselineSession.status = "scored";
+    renderSpeakingBaseline();
+  } catch (error) {
+    speakingBaselineSession.status = "ready";
+    speakingBaselineSession.latestResult = { error: error.message || "基线评分失败，请重试。" };
+    renderSpeakingBaseline();
+  }
+}
+
+async function toggleSpeakingBaselineRecording() {
+  if (!speakingBaselineSession.active) return;
+  if (speakingBaselineSession.status === "recording") return stopSpeakingBaselineRecording(false);
+  if (["starting", "processing"].includes(speakingBaselineSession.status)) return;
+  if (!navigator.mediaDevices?.getUserMedia || !("MediaRecorder" in window)) return toast("当前浏览器不支持录音", "请使用最新版 Chrome，并允许麦克风。" );
+  speakingBaselineSession.status = "starting";
+  speakingBaselineSession.latestResult = null;
+  renderSpeakingBaseline();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks = [];
+    speakingBaselineSession.mediaRecorder = recorder;
+    speakingBaselineSession.mediaStream = stream;
+    speakingBaselineSession.mediaChunks = chunks;
+    speakingBaselineSession.abortRecording = false;
+    speakingBaselineSession.status = "recording";
+    recorder.addEventListener("dataavailable", (event) => { if (event.data?.size) chunks.push(event.data); });
+    recorder.addEventListener("stop", () => {
+      const aborted = speakingBaselineSession.abortRecording;
+      speakingBaselineSession.abortRecording = false;
+      void finishSpeakingBaselineRecording(recorder, chunks, aborted);
+    }, { once: true });
+    recorder.start(250);
+    speakingBaselineSession.stopTimer = window.setTimeout(() => stopSpeakingBaselineRecording(false), 25000);
+    renderSpeakingBaseline();
+  } catch (error) {
+    speakingBaselineSession.status = "ready";
+    speakingBaselineSession.latestResult = { error: error?.name === "NotAllowedError" ? "没有麦克风权限。" : error.message || "无法启动录音。" };
+    renderSpeakingBaseline();
+  }
+}
+
+function startSpeakingBaseline() {
+  if (speakingSession.active) return toast("请先结束 15 分钟训练");
+  stopSpeakingBaselineRecording(true);
+  speakingBaselineSession = { ...speakingBaselineSession, active: true, index: 0, results: [], status: "ready", latestResult: null };
+  renderSpeakingBaseline();
+}
+
+function nextSpeakingBaselineSentence() {
+  if (!speakingBaselineSession.results[speakingBaselineSession.index]) return;
+  if (speakingBaselineSession.index >= SPEAKING_BASELINE_SENTENCES.length - 1) return completeSpeakingBaseline();
+  speakingBaselineSession.index += 1;
+  speakingBaselineSession.status = "ready";
+  speakingBaselineSession.latestResult = null;
+  renderSpeakingBaseline();
+}
+
+function renderSpeakingBaseline() {
+  const card = $("#speakingBaselineCard");
+  if (!card) return;
+  const saved = state.ai?.speakingBaseline;
+  const active = speakingBaselineSession.active;
+  $("#speakingBaselineTitle").textContent = saved ? `当前口语基线 ${saved.score ?? "—"} 分` : "先测一次，后续才看得见进步";
+  $("#speakingBaselineSummary").textContent = saved
+    ? `内容 ${saved.textScore ?? "—"} · 发音相似度 ${saved.soundScore ?? "—"} · 节奏 ${saved.rhythmScore ?? "—"} · ${shortLearningDate(saved.completedAt)}`
+    : "朗读 3 个难度递进的句子，建立内容、发音相似度和节奏基线。";
+  const start = $("#speakingBaselineStart");
+  start.hidden = active;
+  start.textContent = saved ? "重新测试" : "开始基线测试";
+  const practice = $("#speakingBaselinePractice");
+  practice.hidden = !active;
+  if (!active) return;
+  const sentence = SPEAKING_BASELINE_SENTENCES[speakingBaselineSession.index];
+  $("#speakingBaselineProgress").textContent = `${speakingBaselineSession.index + 1} / ${SPEAKING_BASELINE_SENTENCES.length}`;
+  $("#speakingBaselinePrompt").textContent = sentence;
+  const record = $("#speakingBaselineRecord");
+  record.disabled = ["starting", "processing"].includes(speakingBaselineSession.status);
+  record.textContent = speakingBaselineSession.status === "recording" ? "■ 结束并评分" : speakingBaselineSession.status === "processing" ? "正在评分…" : "◉ 开始录音";
+  record.classList.toggle("speaking-recording", speakingBaselineSession.status === "recording");
+  const result = speakingBaselineSession.latestResult;
+  const resultPanel = $("#speakingBaselineResult");
+  resultPanel.hidden = !result;
+  resultPanel.innerHTML = result?.error
+    ? `<p>${escapeHtml(result.error)}</p>`
+    : result ? `<div><strong>${result.score}</strong><span>综合基线</span></div><p>内容 ${result.textScore ?? "—"} · 发音相似度 ${result.soundScore ?? "—"} · 节奏 ${result.rhythmScore ?? "—"}</p><p><b>识别到：</b>${escapeHtml(result.recognized || "未获得文字识别结果")}</p>` : "";
+  const next = $("#speakingBaselineNext");
+  next.hidden = !speakingBaselineSession.results[speakingBaselineSession.index];
+  next.textContent = speakingBaselineSession.index >= SPEAKING_BASELINE_SENTENCES.length - 1 ? "完成基线" : "下一句";
+}
+
 function ensureAIState() {
   if (!state.ai || typeof state.ai !== "object") state.ai = defaultAIState();
   if (!AI_SCENARIOS[state.ai.scenario]) state.ai.scenario = "campus";
@@ -3143,6 +3323,7 @@ function ensureAIState() {
   if (!state.ai.sessions || typeof state.ai.sessions !== "object" || Array.isArray(state.ai.sessions)) state.ai.sessions = {};
   if (!Array.isArray(state.ai.writingReviews)) state.ai.writingReviews = [];
   if (!Array.isArray(state.ai.speakingSessions)) state.ai.speakingSessions = [];
+  if (state.ai.speakingBaseline && typeof state.ai.speakingBaseline !== "object") state.ai.speakingBaseline = null;
 }
 
 function currentAISession() {
@@ -3295,6 +3476,7 @@ function renderAI() {
   renderTextDictation();
   renderVoiceUI();
   renderSpeakingSession();
+  renderSpeakingBaseline();
   renderWritingReview();
   requestAnimationFrame(() => { $("#aiMessages").scrollTop = $("#aiMessages").scrollHeight; });
 }
@@ -4150,6 +4332,59 @@ function startTextDictation() {
 function toggleTextDictation() {
   if (textDictation.listening) stopTextDictation();
   else startTextDictation();
+}
+
+function openSpeakingAudioDatabase() {
+  return new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) return reject(new Error("当前浏览器不支持本地录音保存。"));
+    const request = indexedDB.open("mogu-speaking-audio", 1);
+    request.addEventListener("upgradeneeded", () => {
+      if (!request.result.objectStoreNames.contains("recordings")) request.result.createObjectStore("recordings", { keyPath: "id" });
+    });
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener("error", () => reject(request.error || new Error("无法打开录音存储。")), { once: true });
+  });
+}
+
+async function saveSpeakingRecording(id, blob, metadata = {}) {
+  const database = await openSpeakingAudioDatabase();
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction("recordings", "readwrite");
+      transaction.objectStore("recordings").put({ id, blob, createdAt: new Date().toISOString(), ...metadata });
+      transaction.addEventListener("complete", resolve, { once: true });
+      transaction.addEventListener("error", () => reject(transaction.error || new Error("录音保存失败。")), { once: true });
+    });
+  } finally {
+    database.close();
+  }
+}
+
+async function loadSpeakingRecording(id) {
+  if (!id) return null;
+  const database = await openSpeakingAudioDatabase();
+  try {
+    return await new Promise((resolve, reject) => {
+      const request = database.transaction("recordings", "readonly").objectStore("recordings").get(id);
+      request.addEventListener("success", () => resolve(request.result || null), { once: true });
+      request.addEventListener("error", () => reject(request.error || new Error("录音读取失败。")), { once: true });
+    });
+  } finally {
+    database.close();
+  }
+}
+
+async function playStoredSpeakingRecording(id) {
+  const record = await loadSpeakingRecording(id);
+  if (!record?.blob) throw new Error("这段录音只保存在原设备，当前设备没有找到。" );
+  const objectUrl = URL.createObjectURL(record.blob);
+  const audio = new Audio(objectUrl);
+  await new Promise((resolve, reject) => {
+    const finish = () => { URL.revokeObjectURL(objectUrl); resolve(); };
+    audio.addEventListener("ended", finish, { once: true });
+    audio.addEventListener("error", () => { URL.revokeObjectURL(objectUrl); reject(new Error("录音播放失败。")); }, { once: true });
+    audio.play().catch((error) => { URL.revokeObjectURL(objectUrl); reject(error); });
+  });
 }
 
 async function getShadowingReferenceBlob(text) {
@@ -5159,15 +5394,20 @@ async function finishSpeakingShadowAttempt(wav) {
   } catch {
     acoustic = await scoreStandaloneRhythm(wav, sentence);
   }
+  const recordingId = `shadow:${activeCourse()}:${Date.now()}`;
+  await saveSpeakingRecording(recordingId, wav, { kind: "shadow", sentence }).catch(() => {});
   const result = {
     textScore,
+    soundScore: acoustic.soundScore ?? null,
     rhythmScore: acoustic.rhythmScore,
-    score: combinedPronunciationScore({ textScore, soundScore: null, rhythmScore: acoustic.rhythmScore, sentence: true }),
+    score: combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore, sentence: true }),
     recognized,
-    basic: true,
+    basic: !Number.isFinite(acoustic.soundScore),
+    recordingId,
     createdAt: new Date().toISOString()
   };
   speakingSession.shadowAttempts.push(result);
+  speakingSession.latestRecordingId = recordingId;
   speakingSession.status = "ready";
   speakingSession.statusMessage = speakingSession.shadowAttempts.length >= 3 ? "三次跟读已完成，已保留最好成绩。" : "已记录本次结果；你可以再试一次，或进入复盘。";
   renderSpeakingSession();
@@ -5457,7 +5697,7 @@ async function ensureDoubaoRealtimeClient() {
   }
   await new Promise((resolve) => {
     const script = document.createElement("script");
-    script.src = new URL("./doubao-realtime.js?v=63-retry", window.location.href).href;
+    script.src = new URL("./doubao-realtime.js?v=64-retry", window.location.href).href;
     script.defer = true;
     script.dataset.doubaoRetry = "true";
     script.addEventListener("load", () => {
@@ -5633,6 +5873,74 @@ function renderProgress() {
     ["不认识", counts.unknown]
   ];
   $("#vocabBreakdown").innerHTML = rows.map(([label, value]) => `<div class="breakdown-row"><span>${label}</span><div class="breakdown-track"><i style="width:${words.length ? (value / words.length) * 100 : 0}%"></i></div><strong>${value}</strong></div>`).join("");
+  renderSpeakingWeeklyReport();
+}
+
+function speakingSessionsInLastDays(dayCount = 7, offsetDays = 0) {
+  const end = Date.now() - offsetDays * 86400000;
+  const start = end - dayCount * 86400000;
+  return (state.ai?.speakingSessions || []).filter((session) => {
+    const time = Date.parse(session?.completedAt || session?.startedAt || "");
+    return Number.isFinite(time) && time >= start && time < end;
+  });
+}
+
+function speakingWeeklyStats(sessions) {
+  const scores = sessions.map((session) => Number(session.bestShadow)).filter((score) => score > 0);
+  const errors = sessions.flatMap((session) => Array.isArray(session.errors) ? session.errors : []);
+  const reasonCounts = new Map();
+  errors.forEach((item) => {
+    const reason = String(item?.reason || "").trim();
+    if (reason) reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+  });
+  const commonError = [...reasonCounts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] || "";
+  return {
+    sessions: sessions.length,
+    minutes: Math.round(sessions.reduce((total, session) => total + (Number(session.activeSeconds) || 0), 0) / 60),
+    turns: sessions.reduce((total, session) => total + (Number(session.turns) || 0), 0),
+    bestShadow: scores.length ? Math.max(...scores) : null,
+    averageShadow: scores.length ? Math.round(scores.reduce((total, score) => total + score, 0) / scores.length) : null,
+    commonError
+  };
+}
+
+function latestSpeakingRecordingId() {
+  return (state.ai?.speakingSessions || []).find((session) => session?.recordingId)?.recordingId || "";
+}
+
+function renderSpeakingWeeklyReport() {
+  const panel = $("#speakingWeeklyReport");
+  if (!panel) return;
+  const current = speakingWeeklyStats(speakingSessionsInLastDays(7));
+  const previous = speakingWeeklyStats(speakingSessionsInLastDays(7, 7));
+  const baseline = state.ai?.speakingBaseline;
+  $("#speakingWeekHeadline").textContent = current.sessions ? `${current.sessions} 次 · ${current.minutes} 分钟` : "尚未训练";
+  $("#speakingWeekMetrics").innerHTML = `
+    <div><span>训练次数</span><strong>${current.sessions}</strong></div>
+    <div><span>有效表达</span><strong>${current.turns}<small> 次</small></strong></div>
+    <div><span>平均跟读</span><strong>${current.averageShadow ?? "—"}</strong></div>
+    <div><span>本周最佳</span><strong>${current.bestShadow ?? "—"}</strong></div>`;
+  let trend = "完成一次 15 分钟训练后，这里会生成本周报告。";
+  if (current.sessions) {
+    const comparison = previous.averageShadow != null && current.averageShadow != null
+      ? current.averageShadow > previous.averageShadow ? `跟读均分比上周提高 ${current.averageShadow - previous.averageShadow} 分。`
+        : current.averageShadow < previous.averageShadow ? `跟读均分比上周低 ${previous.averageShadow - current.averageShadow} 分，建议先放慢语速。`
+          : "跟读均分与上周持平。"
+      : baseline?.score != null && current.averageShadow != null ? `当前跟读均分相对基线 ${current.averageShadow - baseline.score >= 0 ? "提高" : "低"} ${Math.abs(current.averageShadow - baseline.score)} 分。`
+        : "本周数据已记录，下周开始显示趋势变化。";
+    trend = `${comparison}${current.commonError ? ` 本周最常出现的问题：${current.commonError}` : " 本周没有反复出现的关键错误。"}`;
+  }
+  $("#speakingWeekInsight").innerHTML = `<p>${escapeHtml(trend)}</p>`;
+  const compare = $("#speakingRecordingCompare");
+  const baselineId = baseline?.firstRecordingId || "";
+  const latestId = latestSpeakingRecordingId();
+  compare.hidden = !baselineId && !latestId;
+  const baselineButton = compare.querySelector('[data-speaking-recording="baseline"]');
+  const latestButton = compare.querySelector('[data-speaking-recording="latest"]');
+  baselineButton.hidden = !baselineId;
+  latestButton.hidden = !latestId;
+  baselineButton.dataset.recordingId = baselineId;
+  latestButton.dataset.recordingId = latestId;
 }
 
 function wordLibraryStatus(word) {
@@ -6134,6 +6442,10 @@ function bindEvents() {
   $("#aiVoiceEnd").addEventListener("click", finishVoiceConversation);
   $("#doubaoBalanceSave").addEventListener("click", saveDoubaoBalance);
   $("#speakingStart").addEventListener("click", startSpeakingSession);
+  $("#speakingBaselineStart").addEventListener("click", startSpeakingBaseline);
+  $("#speakingBaselinePlay").addEventListener("click", () => { void playSpeakingText(SPEAKING_BASELINE_SENTENCES[speakingBaselineSession.index], 1); });
+  $("#speakingBaselineRecord").addEventListener("click", () => { void toggleSpeakingBaselineRecording(); });
+  $("#speakingBaselineNext").addEventListener("click", nextSpeakingBaselineSentence);
   $("#speakingRecord").addEventListener("click", toggleSpeakingRecording);
   $("#speakingHint").addEventListener("click", revealSpeakingHint);
   $("#speakingNext").addEventListener("click", advanceSpeakingPhase);
@@ -6156,6 +6468,11 @@ function bindEvents() {
     if (!button) return;
     const value = button.dataset.speakingPlay;
     void playSpeakingText(speakingSession.shadowSentence, value === "chunk" ? "chunk" : Number(value) || 1);
+  });
+  $("#speakingRecordingCompare").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-recording-id]");
+    if (!button?.dataset.recordingId) return;
+    void playStoredSpeakingRecording(button.dataset.recordingId).catch((error) => toast("无法播放录音", error.message));
   });
   $("#aiWritingType").addEventListener("change", updateWritingLabels);
   $("#aiGenerateTranslation").addEventListener("click", () => { void generateTranslationPrompt(); });
@@ -6234,7 +6551,7 @@ function bindEvents() {
       rateCurrentWord({ "1": "unknown", "2": "fuzzy", "3": "known" }[event.key]);
     }
   });
-  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopWordPronunciationAssessment(true, false); stopAITextSpeech(false); stopTextDictation(true); stopShadowing(true, false); stopVoiceImmediately(false); stopSpeakingResources(true); clearInterval(speakingSession.interval); persistState(); });
+  window.addEventListener("beforeunload", () => { stopPronunciationAudio(); stopWordPronunciationAssessment(true, false); stopAITextSpeech(false); stopTextDictation(true); stopShadowing(true, false); stopVoiceImmediately(false); stopSpeakingResources(true); stopSpeakingBaselineRecording(true); clearInterval(speakingSession.interval); persistState(); });
   window.addEventListener("online", () => scheduleCloudSync(100));
   window.addEventListener("offline", () => setSyncStatus("offline", "当前离线，记录已安全保存在本机"));
   document.addEventListener("visibilitychange", () => {

@@ -15,7 +15,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M12 31C13.5 17 22 10 32 10s18.5 7 20 21H12Z' fill='%2357d6ff'/%3E%3Cpath d='M25 31h14l3 22H22l3-22Z' fill='%23e7f8ff'/%3E%3Ccircle cx='25' cy='22' r='3' fill='%2307111f'/%3E%3Ccircle cx='39' cy='22' r='3' fill='%2307111f'/%3E%3C/svg%3E"
     />
     <title>蘑菇酱四级</title>
-    <link rel="stylesheet" href="./styles.css?v=63" />
+    <link rel="stylesheet" href="./styles.css?v=64" />
   </head>
   <body>
     <div class="app-shell">
@@ -325,6 +325,24 @@
               </div>
 
               <div class="ai-speaking-panel" id="aiSpeakingPanel" hidden>
+                <section class="speaking-baseline-card" id="speakingBaselineCard">
+                  <div>
+                    <p class="card-kicker">SPEAKING BASELINE / 口语基线</p>
+                    <h3 id="speakingBaselineTitle">先测一次，后续才看得见进步</h3>
+                    <p id="speakingBaselineSummary">朗读 3 个难度递进的句子，建立内容、发音相似度和节奏基线。</p>
+                  </div>
+                  <button class="button secondary" type="button" id="speakingBaselineStart">开始基线测试</button>
+                  <div class="speaking-baseline-practice" id="speakingBaselinePractice" hidden>
+                    <div class="speaking-task-meta"><span id="speakingBaselineProgress">1 / 3</span><small>单句最长 25 秒</small></div>
+                    <p id="speakingBaselinePrompt"></p>
+                    <div class="speaking-baseline-actions">
+                      <button class="button ghost" type="button" id="speakingBaselinePlay">▶ 听标准句</button>
+                      <button class="button primary" type="button" id="speakingBaselineRecord">◉ 开始录音</button>
+                      <button class="button secondary" type="button" id="speakingBaselineNext" hidden>下一句</button>
+                    </div>
+                    <div class="speaking-baseline-result" id="speakingBaselineResult" hidden></div>
+                  </div>
+                </section>
                 <div class="speaking-session-head">
                   <div>
                     <p class="card-kicker">DAILY SPEAKING / 每日口语</p>
@@ -445,6 +463,16 @@
               <div class="vocab-breakdown" id="vocabBreakdown"></div>
             </article>
           </div>
+
+          <article class="card speaking-weekly-report" id="speakingWeeklyReport">
+            <div class="card-title-row"><div><p class="card-kicker">SPEAKING / 本周口语</p><h2>从第一次录音看见变化</h2></div><strong id="speakingWeekHeadline">尚未训练</strong></div>
+            <div class="speaking-week-metrics" id="speakingWeekMetrics"></div>
+            <div class="speaking-week-insight" id="speakingWeekInsight"></div>
+            <div class="speaking-recording-compare" id="speakingRecordingCompare" hidden>
+              <button class="button ghost" type="button" data-speaking-recording="baseline">▶ 播放基线录音</button>
+              <button class="button secondary" type="button" data-speaking-recording="latest">▶ 播放最新跟读</button>
+            </div>
+          </article>
         </section>
 
         <section class="view" id="view-settings" data-view="settings" hidden>
@@ -566,7 +594,7 @@
     </dialog>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-    <script src="./doubao-realtime.js?v=63" defer></script>
-    <script src="./app.js?v=63" defer></script>
+    <script src="./doubao-realtime.js?v=64" defer></script>
+    <script src="./app.js?v=64" defer></script>
   </body>
 </html>

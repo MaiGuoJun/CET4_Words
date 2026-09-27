@@ -83,8 +83,8 @@ requireText(worker, 'url.pathname === "/voice-session"', "short-lived Doubao voi
 requireText(worker, 'url.pathname === "/doubao-realtime"', "Doubao WebSocket gateway");
 requireText(worker, 'headers["X-Api-Key"] = apiKey', "new Doubao API key authentication");
 requireText(worker, '"X-Api-Access-Key"', "server-side Doubao credentials");
-requireText(html, "doubao-realtime.js?v=63", "v63 Doubao client cache bust");
-requireText(html, "app.js?v=63", "v63 script cache bust");
+requireText(html, "doubao-realtime.js?v=64", "v64 Doubao client cache bust");
+requireText(html, "app.js?v=64", "v64 script cache bust");
 requireText(html, 'id="doubaoBudgetRemaining"', "Doubao budget protection panel");
 requireText(html, 'id="doubaoBalanceInput"', "manual Doubao balance calibration");
 requireText(app, "defaultDoubaoBudget", "persistent Doubao budget defaults");
@@ -92,5 +92,13 @@ requireText(app, "sessionTurnLimit: 8", "eight-turn Doubao session guard");
 requireText(app, "sessionMinuteLimit: 5", "five-minute Doubao session guard");
 requireText(app, "weeklySessionLimit: 3", "weekly Doubao session guard");
 requireText(app, "recordDoubaoBudgetSession", "Doubao usage estimator");
+requireText(html, 'id="speakingBaselineCard"', "speaking baseline flow");
+requireText(html, 'id="speakingWeeklyReport"', "weekly speaking report");
+requireText(app, "SPEAKING_BASELINE_SENTENCES", "three-sentence speaking baseline");
+requireText(app, "saveSpeakingRecording", "local speaking recording archive");
+requireText(app, "playStoredSpeakingRecording", "baseline and latest recording playback");
+requireText(app, "renderSpeakingWeeklyReport", "weekly speaking aggregation");
+requireText(app, "soundScore: acoustic.soundScore ?? null", "three-part structured shadowing score");
+requireText(app, "firstRecordingId", "baseline recording comparison anchor");
 
 console.log("AI contract smoke test passed");
