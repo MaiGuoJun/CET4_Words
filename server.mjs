@@ -1,6 +1,7 @@
 import http from "node:http";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readFile, stat } from "node:fs/promises";
 
@@ -30,6 +31,8 @@ await loadLocalEnvironment();
 const PORT = Number(process.env.PORT) || 4174;
 const MODEL = process.env.OLLAMA_MODEL || "qwen3.5:2b";
 const OLLAMA_URL = (process.env.OLLAMA_URL || "http://127.0.0.1:11434").replace(/\/$/, "");
+const LOCAL_PHONEME_URL = (process.env.LOCAL_PHONEME_URL || "http://127.0.0.1:4175").replace(/\/$/, "");
+const LOCAL_PHONEME_PYTHON = process.env.LOCAL_PHONEME_PYTHON || "D:\\MoguSpeech\\.venv\\Scripts\\python.exe";
 const ZHIPU_API_KEY = String(process.env.ZHIPU_API_KEY || "").trim();
 const ZHIPU_MODEL = String(process.env.ZHIPU_MODEL || "glm-5.3-flash").trim();
 const ZHIPU_BASE_URL = (process.env.ZHIPU_BASE_URL || "https://open.bigmodel.cn/api/paas/v4").replace(/\/$/, "");
@@ -38,6 +41,7 @@ const rateLimits = new Map();
 const pronunciationCache = new Map();
 const pronunciationSources = new Map();
 const pronunciationAudioCache = new Map();
+let localPhonemeProcess = null;
 
 const SCENARIOS = {
   campus: "campus life, classes, routines, and student clubs",
@@ -227,7 +231,7 @@ function allowRequest(request) {
   return true;
 }
 
-async function readBody(request, maxBytes = MAX_BODY_BYTES) {
+async function readBufferBody(request, maxBytes = MAX_BODY_BYTES) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -235,11 +239,92 @@ async function readBody(request, maxBytes = MAX_BODY_BYTES) {
     if (size > maxBytes) throw new Error("PAYLOAD_TOO_LARGE");
     chunks.push(chunk);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+async function readBody(request, maxBytes = MAX_BODY_BYTES) {
+  return (await readBufferBody(request, maxBytes)).toString("utf8");
 }
 
 async function readJsonBody(request) {
   return JSON.parse((await readBody(request)) || "{}");
+}
+
+async function localPhonemeHealth(timeout = 1200) {
+  try {
+    const response = await fetch(`${LOCAL_PHONEME_URL}/health`, { signal: AbortSignal.timeout(timeout) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureLocalPhonemeService() {
+  if (await localPhonemeHealth()) return true;
+  try {
+    await stat(LOCAL_PHONEME_PYTHON);
+    await stat(path.join(ROOT_DIR, "scripts", "local-phoneme-server.py"));
+  } catch {
+    return false;
+  }
+  if (!localPhonemeProcess || localPhonemeProcess.exitCode !== null) {
+    localPhonemeProcess = spawn(LOCAL_PHONEME_PYTHON, [path.join(ROOT_DIR, "scripts", "local-phoneme-server.py")], {
+      cwd: ROOT_DIR,
+      windowsHide: true,
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        HF_HOME: process.env.HF_HOME || "D:\\MoguSpeech\\models",
+        HF_HUB_OFFLINE: "1",
+        HF_HUB_DISABLE_SYMLINKS_WARNING: "1",
+        TRANSFORMERS_OFFLINE: "1",
+        OPENPRONOUNCE_CACHE_DIR: process.env.OPENPRONOUNCE_CACHE_DIR || "D:\\MoguSpeech\\cache\\references",
+        PHONEMIZER_ESPEAK_LIBRARY: process.env.PHONEMIZER_ESPEAK_LIBRARY || "D:\\MoguSpeech\\espeak\\eSpeak NG\\libespeak-ng.dll",
+        ESPEAK_DATA_PATH: process.env.ESPEAK_DATA_PATH || "D:\\MoguSpeech\\espeak\\eSpeak NG\\espeak-ng-data",
+        PYTHONUTF8: "1",
+        PATH: `D:\\MoguSpeech\\espeak\\eSpeak NG;${process.env.PATH || ""}`,
+        TEMP: process.env.MOGU_SPEECH_TEMP || "D:\\MoguSpeech\\tmp",
+        TMP: process.env.MOGU_SPEECH_TEMP || "D:\\MoguSpeech\\tmp"
+      }
+    });
+    localPhonemeProcess.once("exit", () => { localPhonemeProcess = null; });
+    localPhonemeProcess.once("error", () => { localPhonemeProcess = null; });
+  }
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (await localPhonemeHealth(800)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return false;
+}
+
+async function handleLocalPhonemeAssessment(request, response, requestUrl) {
+  const reference = String(requestUrl.searchParams.get("reference") || "").trim();
+  if (!reference || reference.length > 600) return json(response, 400, { error: "跟读文本长度不正确。" });
+  let audio;
+  try {
+    audio = await readBufferBody(request, 6 * 1024 * 1024);
+  } catch (error) {
+    return json(response, error.message === "PAYLOAD_TOO_LARGE" ? 413 : 400, { error: "录音为空或过大。" });
+  }
+  if (!audio.length) return json(response, 400, { error: "没有收到录音。" });
+  if (!(await ensureLocalPhonemeService())) return json(response, 503, { error: "本地音素引擎尚未安装或启动。" });
+  try {
+    const form = new FormData();
+    form.append("file", new Blob([audio], { type: request.headers["content-type"] || "audio/wav" }), "recording.wav");
+    form.append("expected_text", reference);
+    form.append("lang", "en");
+    const upstream = await fetch(`${LOCAL_PHONEME_URL}/pronunciation`, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(180000)
+    });
+    const payload = await upstream.json().catch(() => ({}));
+    if (!upstream.ok) throw new Error(String(payload?.detail || payload?.error || `status ${upstream.status}`));
+    return json(response, 200, payload);
+  } catch (error) {
+    console.error("Local phoneme assessment failed:", error.message);
+    return json(response, 502, { error: "本地音素评分失败，请稍后重试。" });
+  }
 }
 
 function parseTutorReply(text) {
@@ -570,6 +655,9 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && requestUrl.pathname === "/api/ai-status") {
     return json(response, 200, await getLocalAIStatus());
   }
+  if (request.method === "POST" && requestUrl.pathname === "/api/local-pronunciation-assessment") {
+    return handleLocalPhonemeAssessment(request, response, requestUrl);
+  }
   if (request.method === "POST" && requestUrl.pathname === "/api/ai-chat") return handleAIChat(request, response);
   if (!["GET", "HEAD"].includes(request.method || "")) return json(response, 405, { error: "Method not allowed" });
   return serveStatic(request, response, requestUrl);
@@ -580,4 +668,7 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(ZHIPU_API_KEY
     ? `AI：智谱 / ${ZHIPU_MODEL}（本地备用：Ollama / ${MODEL}）`
     : `AI：Ollama / ${MODEL}`);
+  void ensureLocalPhonemeService().then((ready) => {
+    console.log(ready ? "发音评测：OpenPronounce 本地音素引擎" : "发音评测：基础声学评分（本地音素引擎未启动）");
+  });
 });

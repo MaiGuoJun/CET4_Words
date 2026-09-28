@@ -5,6 +5,7 @@ const html = fs.readFileSync("dist/index.html", "utf8");
 const server = fs.readFileSync("server.mjs", "utf8");
 const doubao = fs.readFileSync("dist/doubao-realtime.js", "utf8");
 const worker = fs.readFileSync("cloudflare/src/worker.mjs", "utf8");
+const phonemeServer = fs.readFileSync("scripts/local-phoneme-server.py", "utf8");
 
 const requireText = (source, text, label) => {
   if (!source.includes(text)) throw new Error(`Missing ${label}: ${text}`);
@@ -69,7 +70,13 @@ requireText(app, "if (!speakingSession.active || speakingSession.pending || spea
 requireText(app, 'training: { mode: "speaking", phase, prompt: shownPrompt, retry: retrying }', "speaking training request context");
 requireText(app, "speakingSession.conversationTurns >= 6", "six-turn scenario target");
 requireText(app, "speakingSession.shadowAttempts.length >= 3", "three-attempt shadowing limit");
-requireText(app, "这里不会把普通语音识别冒充音素评分", "honest shadowing score label");
+requireText(app, "requestLocalPhonemeAssessment", "local phoneme assessment client");
+requireText(app, "短词或嘈杂录音可能偶尔误报", "honest local phoneme limitation label");
+requireText(server, "/api/local-pronunciation-assessment", "local phoneme assessment proxy");
+requireText(server, "ensureLocalPhonemeService", "local phoneme service bootstrap");
+requireText(phonemeServer, "phones.recognize_phones", "OpenPronounce phoneme recognition call");
+requireText(phonemeServer, "phones.compare_phones", "OpenPronounce phoneme alignment call");
+requireText(phonemeServer, 'host="127.0.0.1"', "loopback-only phoneme service");
 requireText(app, "data-speaking-translation", "collapsed speaking translation");
 requireText(server, 'body.training?.mode === "speaking"', "backend speaking contract");
 requireText(app, 'training: { mode: "voice-review", assistantReply: replyText }', "voice-turn Zhipu review");
@@ -83,8 +90,8 @@ requireText(worker, 'url.pathname === "/voice-session"', "short-lived Doubao voi
 requireText(worker, 'url.pathname === "/doubao-realtime"', "Doubao WebSocket gateway");
 requireText(worker, 'headers["X-Api-Key"] = apiKey', "new Doubao API key authentication");
 requireText(worker, '"X-Api-Access-Key"', "server-side Doubao credentials");
-requireText(html, "doubao-realtime.js?v=64", "v64 Doubao client cache bust");
-requireText(html, "app.js?v=64", "v64 script cache bust");
+requireText(html, "doubao-realtime.js?v=65", "v65 Doubao client cache bust");
+requireText(html, "app.js?v=65", "v65 script cache bust");
 requireText(html, 'id="doubaoBudgetRemaining"', "Doubao budget protection panel");
 requireText(html, 'id="doubaoBalanceInput"', "manual Doubao balance calibration");
 requireText(app, "defaultDoubaoBudget", "persistent Doubao budget defaults");
@@ -99,6 +106,7 @@ requireText(app, "saveSpeakingRecording", "local speaking recording archive");
 requireText(app, "playStoredSpeakingRecording", "baseline and latest recording playback");
 requireText(app, "renderSpeakingWeeklyReport", "weekly speaking aggregation");
 requireText(app, "soundScore: acoustic.soundScore ?? null", "three-part structured shadowing score");
+requireText(app, "phonemeScore: localAssessment?.accuracyScore ?? null", "true phoneme score component");
 requireText(app, "firstRecordingId", "baseline recording comparison anchor");
 
 console.log("AI contract smoke test passed");

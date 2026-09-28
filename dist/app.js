@@ -249,7 +249,7 @@ let aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: fal
 let zhipuSpeechUnavailableUntil = 0;
 let zhipuSpeechFailureReason = "";
 let shadowingState = { messageIndex: null, status: "idle", recognition: null, mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, error: "" };
-let wordPronunciationAssessment = { word: "", status: "idle", mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, provider: "", phonemes: [], errorType: "", error: "" };
+let wordPronunciationAssessment = { word: "", status: "idle", mediaRecorder: null, mediaStream: null, mediaChunks: [], stopTimer: null, abortRecording: false, recognized: "", textScore: null, phonemeScore: null, soundScore: null, rhythmScore: null, score: null, provider: "", phonemes: [], errorType: "", error: "" };
 const ttsAssessmentCache = new Map();
 const visibleAITranslations = new Set();
 let voiceSession = {
@@ -1587,7 +1587,7 @@ function renderCurrentWord() {
   const savedPronunciation = state.pronunciationScores[currentWord.word];
   wordPronunciationAssessment = savedPronunciation
     ? { ...wordPronunciationAssessment, ...savedPronunciation, word: currentWord.word, status: "complete", error: "" }
-    : { ...wordPronunciationAssessment, word: currentWord.word, status: "idle", recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, provider: "", phonemes: [], errorType: "", error: "" };
+    : { ...wordPronunciationAssessment, word: currentWord.word, status: "idle", recognized: "", textScore: null, phonemeScore: null, soundScore: null, rhythmScore: null, score: null, provider: "", phonemes: [], errorType: "", error: "" };
   $("#wordText").textContent = currentWord.word;
   $("#wordPhonetic").textContent = currentWord.phonetic ? `/${currentWord.phonetic.replace(/^\/?|\/?$/g, "")}/` : "";
   renderWordMeanings(currentWord);
@@ -3038,7 +3038,7 @@ function finishSpeakingSession() {
     turns: speakingSession.turns.length,
     errors: speakingSession.errors.slice(0, 8),
     bestShadow,
-    bestShadowParts: bestShadowAttempt ? { textScore: bestShadowAttempt.textScore, soundScore: bestShadowAttempt.soundScore, rhythmScore: bestShadowAttempt.rhythmScore } : null,
+    bestShadowParts: bestShadowAttempt ? { textScore: bestShadowAttempt.textScore, phonemeScore: bestShadowAttempt.phonemeScore, soundScore: bestShadowAttempt.soundScore, rhythmScore: bestShadowAttempt.rhythmScore } : null,
     recordingId: bestShadowAttempt?.recordingId || speakingSession.latestRecordingId || "",
     scenario: state.ai.scenario
   });
@@ -3117,7 +3117,7 @@ function renderSpeakingShadowing() {
   container.innerHTML = `
     <p><b>目标句：</b>${escapeHtml(speakingSession.shadowSentence)}</p>
     <div class="speaking-shadow-actions"><button type="button" data-speaking-play="1">▶ 正常语速</button><button type="button" data-speaking-play="0.8">▶ 0.8 倍</button><button type="button" data-speaking-play="chunk">▶ 意群播放</button></div>
-    ${best ? `<div class="score"><strong>${best.score}</strong><span>综合跟读分 · 最好成绩</span></div><p>内容 ${best.textScore ?? "—"} · 发音相似度 ${best.soundScore ?? "—"} · 节奏 ${best.rhythmScore ?? "—"} · 尝试 ${speakingSession.shadowAttempts.length}/3</p>` : `<p>尚未跟读；这里不会把普通语音识别冒充音素评分，会分别显示内容、声学相似度和节奏。</p>`}`;
+    ${best ? `<div class="score"><strong>${best.score}</strong><span>综合跟读分 · 最好成绩</span></div><p>内容 ${best.textScore ?? "—"} · 音素 ${best.phonemeScore ?? "—"} · 发音相似度 ${best.soundScore ?? "—"} · 节奏 ${best.rhythmScore ?? "—"} · 尝试 ${speakingSession.shadowAttempts.length}/3</p>${renderPhonemeAssessment(best.phonemes)}` : `<p>尚未跟读；本机音素引擎可用时会显示逐音素反馈，否则显示内容、声学相似度和节奏。</p>`}`;
 }
 
 function renderSpeakingSession() {
@@ -3178,6 +3178,7 @@ function completeSpeakingBaseline() {
     completedAt: new Date().toISOString(),
     score: speakingAverage(results, "score"),
     textScore: speakingAverage(results, "textScore"),
+    phonemeScore: speakingAverage(results, "phonemeScore"),
     soundScore: speakingAverage(results, "soundScore"),
     rhythmScore: speakingAverage(results, "rhythmScore"),
     firstRecordingId: results[0]?.recordingId || "",
@@ -3205,10 +3206,11 @@ async function finishSpeakingBaselineRecording(recorder, chunks, aborted) {
     const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
     if (!recorded.size) throw new Error("没有录到声音，请重新试一次。" );
     const wav = await convertRecordingToWav(recorded);
-    const [recognized, acoustic] = await Promise.all([
-      deviceAIConfig.apiKey ? requestCloudTranscription(wav).catch(() => "") : Promise.resolve(""),
+    const [localAssessment, acoustic] = await Promise.all([
+      requestLocalPhonemeAssessment(wav, sentence).catch(() => null),
       getShadowingReferenceBlob(sentence).then((reference) => comparePronunciationAudio(wav, reference)).catch(() => scoreStandaloneRhythm(wav, sentence))
     ]);
+    const recognized = localAssessment?.recognized || (deviceAIConfig.apiKey ? await requestCloudTranscription(wav).catch(() => "") : "");
     const textScore = recognized ? scoreTextMatch(sentence, recognized).score : null;
     const recordingId = `baseline:${activeCourse()}:${Date.now()}:${speakingBaselineSession.index}`;
     await saveSpeakingRecording(recordingId, wav, { kind: "baseline", sentence }).catch(() => {});
@@ -3216,10 +3218,13 @@ async function finishSpeakingBaselineRecording(recorder, chunks, aborted) {
       sentence,
       recordingId,
       recognized,
-      textScore,
+      textScore: localAssessment?.completenessScore ?? textScore,
+      phonemeScore: localAssessment?.accuracyScore ?? null,
       soundScore: acoustic.soundScore ?? null,
       rhythmScore: acoustic.rhythmScore ?? null,
-      score: combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore, sentence: true }),
+      score: localAssessment?.score ?? combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore, sentence: true }),
+      phonemes: localAssessment?.phonemes || [],
+      provider: localAssessment?.provider || "local-acoustic",
       createdAt: new Date().toISOString()
     };
     speakingBaselineSession.results[speakingBaselineSession.index] = result;
@@ -3290,7 +3295,7 @@ function renderSpeakingBaseline() {
   const active = speakingBaselineSession.active;
   $("#speakingBaselineTitle").textContent = saved ? `当前口语基线 ${saved.score ?? "—"} 分` : "先测一次，后续才看得见进步";
   $("#speakingBaselineSummary").textContent = saved
-    ? `内容 ${saved.textScore ?? "—"} · 发音相似度 ${saved.soundScore ?? "—"} · 节奏 ${saved.rhythmScore ?? "—"} · ${shortLearningDate(saved.completedAt)}`
+    ? `内容 ${saved.textScore ?? "—"} · 音素 ${saved.phonemeScore ?? "—"} · 发音相似度 ${saved.soundScore ?? "—"} · 节奏 ${saved.rhythmScore ?? "—"} · ${shortLearningDate(saved.completedAt)}`
     : "朗读 3 个难度递进的句子，建立内容、发音相似度和节奏基线。";
   const start = $("#speakingBaselineStart");
   start.hidden = active;
@@ -3310,7 +3315,7 @@ function renderSpeakingBaseline() {
   resultPanel.hidden = !result;
   resultPanel.innerHTML = result?.error
     ? `<p>${escapeHtml(result.error)}</p>`
-    : result ? `<div><strong>${result.score}</strong><span>综合基线</span></div><p>内容 ${result.textScore ?? "—"} · 发音相似度 ${result.soundScore ?? "—"} · 节奏 ${result.rhythmScore ?? "—"}</p><p><b>识别到：</b>${escapeHtml(result.recognized || "未获得文字识别结果")}</p>` : "";
+    : result ? `<div><strong>${result.score}</strong><span>综合基线</span></div><p>内容 ${result.textScore ?? "—"} · 音素 ${result.phonemeScore ?? "—"} · 发音相似度 ${result.soundScore ?? "—"} · 节奏 ${result.rhythmScore ?? "—"}</p><p><b>识别到：</b>${escapeHtml(result.recognized || "未获得文字识别结果")}</p>${renderPhonemeAssessment(result.phonemes)}` : "";
   const next = $("#speakingBaselineNext");
   next.hidden = !speakingBaselineSession.results[speakingBaselineSession.index];
   next.textContent = speakingBaselineSession.index >= SPEAKING_BASELINE_SENTENCES.length - 1 ? "完成基线" : "下一句";
@@ -3380,11 +3385,14 @@ function renderShadowingResult(message, index) {
   if (active && shadowingState.error) return `<div class="shadowing-result error">${escapeHtml(shadowingState.error)}</div>`;
   const result = active && shadowingState.status === "complete" ? shadowingState : message?.shadowing;
   if (!result) return "";
-  const basic = result.basic === true || !Number.isFinite(result.soundScore);
-  const note = basic
+  const truePhoneme = result.provider === "openpronounce";
+  const basic = !truePhoneme && (result.basic === true || !Number.isFinite(result.soundScore));
+  const note = truePhoneme
+    ? "本机 OpenPronounce 使用 Wav2Vec2 识别并对齐音素；短句、强噪声或口音较重时可能偶尔误报。"
+    : basic
     ? "基础评分：内容根据语音识别结果判断，节奏根据录音语速和连续性估算；不包含标准音色对比。"
     : "完整声音评分：综合比较识别文字、声音频谱、时长与能量节奏；仍不等同于专业逐音素测评。";
-  return `<div class="shadowing-result"><div><strong>${Number(result.score) || 0}</strong><span>${basic ? "基础跟读分" : "综合跟读分"}</span></div><div class="shadowing-score-parts"><span>内容 ${Number.isFinite(result.textScore) ? result.textScore : "—"}</span><span>发音相似度 ${Number.isFinite(result.soundScore) ? result.soundScore : "—"}</span><span>节奏 ${Number.isFinite(result.rhythmScore) ? result.rhythmScore : "—"}</span></div><p><b>识别到：</b>${escapeHtml(result.recognized || "未识别到文字")}</p><p><b>建议：</b>${escapeHtml(pronunciationAdvice({ ...result, basic }))}</p><small>${note}</small></div>`;
+  return `<div class="shadowing-result"><div><strong>${Number(result.score) || 0}</strong><span>${basic ? "基础跟读分" : "综合跟读分"}</span></div><div class="shadowing-score-parts"><span>内容 ${Number.isFinite(result.textScore) ? result.textScore : "—"}</span><span>音素 ${Number.isFinite(result.phonemeScore) ? result.phonemeScore : "—"}</span><span>发音相似度 ${Number.isFinite(result.soundScore) ? result.soundScore : "—"}</span><span>节奏 ${Number.isFinite(result.rhythmScore) ? result.rhythmScore : "—"}</span></div><p><b>识别到：</b>${escapeHtml(result.recognized || "未识别到文字")}</p>${renderPhonemeAssessment(result.phonemes)}<p><b>建议：</b>${escapeHtml(pronunciationAdvice({ ...result, basic }))}</p><small>${note}</small></div>`;
 }
 
 function renderWritingReview() {
@@ -3980,9 +3988,10 @@ function combinedPronunciationScore({ textScore, soundScore, rhythmScore, senten
   return totalWeight ? Math.round(values.reduce((total, [value, weight]) => total + value * weight, 0) / totalWeight) : 0;
 }
 
-function pronunciationAdvice({ textScore, soundScore, rhythmScore, basic = false }) {
+function pronunciationAdvice({ textScore, phonemeScore, soundScore, rhythmScore, basic = false }) {
   const advice = [];
   if (Number.isFinite(textScore) && textScore < 80) advice.push("读音可能改变了单词或漏读；对照音标逐段慢读。" );
+  if (Number.isFinite(phonemeScore) && phonemeScore < 75) advice.push("有个别音素与目标读音不一致；优先练习红色音素，再重新完整跟读。" );
   if (Number.isFinite(soundScore) && soundScore < 70) advice.push("音色轨迹与标准音差异较大，重点检查元音是否饱满、辅音是否到位。" );
   if (Number.isFinite(rhythmScore) && rhythmScore < 70) advice.push(basic ? "语速或停顿不够自然；放慢一点，按意群连续读完。" : "时长或轻重节奏偏差较大，先听标准音，再模仿停连与重音。" );
   return advice[0] || (basic ? "内容和语速整体不错；当前是基础评分，暂未比较标准音色。" : "整体接近标准音，可以尝试用自然语速再读一次。");
@@ -4031,6 +4040,21 @@ async function requestCloudTranscription(wavBlob) {
   return text;
 }
 
+async function requestLocalPhonemeAssessment(wavBlob, referenceText) {
+  const reference = String(referenceText || "").trim();
+  if (!reference || !wavBlob?.size) return null;
+  const response = await fetch(`/api/local-pronunciation-assessment?reference=${encodeURIComponent(reference)}`, {
+    method: "POST",
+    headers: { "Content-Type": wavBlob.type || "audio/wav" },
+    body: wavBlob,
+    signal: AbortSignal.timeout(180000)
+  });
+  if ([404, 405, 503].includes(response.status)) return null;
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error || "本地音素评分失败。" );
+  return data?.provider === "openpronounce" ? data : null;
+}
+
 function renderPhonemeAssessment(phonemes = []) {
   if (!Array.isArray(phonemes) || !phonemes.length) return "";
   const chips = phonemes.map((item) => {
@@ -4041,7 +4065,7 @@ function renderPhonemeAssessment(phonemes = []) {
       : "";
     return `<span class="phoneme-score ${level}"${alternatives}><b>${escapeHtml(item?.phoneme || "?")}</b><small>${score}</small></span>`;
   }).join("");
-  return `<div class="phoneme-assessment"><p><b>逐音素</b><span>绿色准确，黄色需注意，红色重点纠正</span></p><div>${chips}</div></div>`;
+  return `<div class="phoneme-assessment"><p><b>音素反馈</b><span>黄色需注意，红色重点纠正</span></p><div>${chips}</div></div>`;
 }
 
 function renderWordPronunciationAssessment() {
@@ -4069,6 +4093,7 @@ function renderWordPronunciationAssessment() {
   }
   panel.innerHTML = `<div class="pronunciation-score-grid">
     <div class="primary"><strong>${Number(stateValue.score) || 0}</strong><span>综合分</span></div>
+    <div><strong>${Number.isFinite(stateValue.phonemeScore) ? stateValue.phonemeScore : "—"}</strong><span>音素准确度</span></div>
     <div><strong>${Number.isFinite(stateValue.soundScore) ? stateValue.soundScore : "—"}</strong><span>声音相似度</span></div>
     <div><strong>${Number.isFinite(stateValue.rhythmScore) ? stateValue.rhythmScore : "—"}</strong><span>时长与节奏</span></div>
     <div><strong>${Number.isFinite(stateValue.textScore) ? stateValue.textScore : "—"}</strong><span>读音识别</span></div>
@@ -4077,7 +4102,7 @@ function renderWordPronunciationAssessment() {
   ${stateValue.recognized ? `<p><b>识别到</b>${escapeHtml(stateValue.recognized)}</p>` : ""}
   ${renderPhonemeAssessment(stateValue.phonemes)}
   <p><b>建议</b>${escapeHtml(pronunciationAdvice(stateValue))}</p>
-  <small>${stateValue.provider === "asr" ? "本次没有可用标准录音，仅按智谱语音识别结果给出基础分。" : "本次在设备上比较标准录音与你的频谱、时长及能量节奏。"}</small>`;
+  <small>${stateValue.provider === "openpronounce" ? "OpenPronounce 在本机进行 Wav2Vec2 音素识别与对齐；短词或嘈杂录音可能偶尔误报。" : stateValue.provider === "asr" ? "本次没有可用标准录音，仅按智谱语音识别结果给出基础分。" : "本次在设备上比较标准录音与你的频谱、时长及能量节奏。"}</small>`;
 }
 
 function stopWordPronunciationAssessment(abort = false, shouldRender = true) {
@@ -4106,21 +4131,25 @@ async function finishWordPronunciationAssessment(recorder, chunks, word, aborted
   try {
     const recorded = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
     const wav = await convertRecordingToWav(recorded);
+    const localAssessment = await requestLocalPhonemeAssessment(wav, word).catch(() => null);
     const [referenceResult, transcription] = await Promise.all([
       getWordPronunciationBlob(word).then((reference) => comparePronunciationAudio(wav, reference)).catch(() => null),
-      deviceAIConfig.apiKey ? requestCloudTranscription(wav).catch(() => "") : Promise.resolve("")
+      localAssessment?.recognized
+        ? Promise.resolve(localAssessment.recognized)
+        : deviceAIConfig.apiKey ? requestCloudTranscription(wav).catch(() => "") : Promise.resolve("")
     ]);
     const textScore = transcription ? scoreTextMatch(word, transcription).score : null;
-    if (!referenceResult && !transcription) throw new Error("这个词暂时没有可用标准录音，请联网后再试。" );
+    if (!localAssessment && !referenceResult && !transcription) throw new Error("这个词暂时没有可用标准录音，请联网后再试。" );
     const result = {
-      textScore,
+      textScore: localAssessment?.completenessScore ?? textScore,
+      phonemeScore: localAssessment?.accuracyScore ?? null,
       soundScore: referenceResult?.soundScore ?? null,
       rhythmScore: referenceResult?.rhythmScore ?? null,
-      score: combinedPronunciationScore({ textScore, soundScore: referenceResult?.soundScore, rhythmScore: referenceResult?.rhythmScore }),
+      score: localAssessment?.score ?? combinedPronunciationScore({ textScore, soundScore: referenceResult?.soundScore, rhythmScore: referenceResult?.rhythmScore }),
       recognized: transcription,
-      phonemes: [],
+      phonemes: localAssessment?.phonemes || [],
       errorType: "",
-      provider: referenceResult ? "local" : "asr"
+      provider: localAssessment ? "openpronounce" : referenceResult ? "local" : "asr"
     };
     Object.assign(wordPronunciationAssessment, result, { status: "complete", error: "" });
     state.pronunciationScores[word] = { ...result, assessedAt: new Date().toISOString() };
@@ -4140,7 +4169,7 @@ async function startWordPronunciationAssessment() {
   if (!navigator.mediaDevices?.getUserMedia || !("MediaRecorder" in window)) return toast("当前浏览器不支持录音", "请使用最新版 Chrome，并确认网页使用 HTTPS。" );
   stopPronunciationAudio();
   stopWordPronunciationAssessment(true, false);
-  wordPronunciationAssessment = { ...wordPronunciationAssessment, word, status: "starting", recognized: "", textScore: null, soundScore: null, rhythmScore: null, score: null, provider: "", phonemes: [], errorType: "", error: "" };
+  wordPronunciationAssessment = { ...wordPronunciationAssessment, word, status: "starting", recognized: "", textScore: null, phonemeScore: null, soundScore: null, rhythmScore: null, score: null, provider: "", phonemes: [], errorType: "", error: "" };
   renderWordPronunciationAssessment();
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -4406,24 +4435,29 @@ async function getShadowingReferenceBlob(text) {
 async function finishShadowingScore(messageIndex, recognized, learnerWav = null) {
   const message = currentAISession()[messageIndex];
   if (!message || shadowingState.messageIndex !== messageIndex) return;
-  const textScore = recognized ? scoreTextMatch(message.content, recognized).score : null;
+  let localAssessment = null;
   let acoustic = { soundScore: null, rhythmScore: null };
   let basic = !learnerWav;
   if (learnerWav) {
-    try {
-      const reference = await getShadowingReferenceBlob(message.content);
-      acoustic = await comparePronunciationAudio(learnerWav, reference);
-    } catch {
-      acoustic = await scoreStandaloneRhythm(learnerWav, message.content);
-      basic = true;
-    }
+    [localAssessment, acoustic] = await Promise.all([
+      requestLocalPhonemeAssessment(learnerWav, message.content).catch(() => null),
+      getShadowingReferenceBlob(message.content)
+        .then((reference) => comparePronunciationAudio(learnerWav, reference))
+        .catch(() => scoreStandaloneRhythm(learnerWav, message.content))
+    ]);
+    basic = !localAssessment && !Number.isFinite(acoustic.soundScore);
   }
+  const finalRecognized = localAssessment?.recognized || recognized;
+  const textScore = localAssessment?.completenessScore ?? (finalRecognized ? scoreTextMatch(message.content, finalRecognized).score : null);
   const result = {
     textScore,
+    phonemeScore: localAssessment?.accuracyScore ?? null,
     soundScore: acoustic.soundScore,
     rhythmScore: acoustic.rhythmScore,
-    score: combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore, sentence: true }),
-    recognized,
+    score: localAssessment?.score ?? combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore, sentence: true }),
+    recognized: finalRecognized,
+    phonemes: localAssessment?.phonemes || [],
+    provider: localAssessment?.provider || "local-acoustic",
     basic
   };
   shadowingState.status = "complete";
@@ -5384,25 +5418,26 @@ async function playSpeakingText(text, speed = 1) {
 
 async function finishSpeakingShadowAttempt(wav) {
   const sentence = speakingSession.shadowSentence;
-  let recognized = "";
-  if (deviceAIConfig.apiKey) recognized = await requestCloudTranscription(wav).catch(() => "");
-  const textScore = recognized ? scoreTextMatch(sentence, recognized).score : null;
-  let acoustic;
-  try {
-    const reference = await getShadowingReferenceBlob(sentence);
-    acoustic = await comparePronunciationAudio(wav, reference);
-  } catch {
-    acoustic = await scoreStandaloneRhythm(wav, sentence);
-  }
+  const [localAssessment, acoustic] = await Promise.all([
+    requestLocalPhonemeAssessment(wav, sentence).catch(() => null),
+    getShadowingReferenceBlob(sentence)
+      .then((reference) => comparePronunciationAudio(wav, reference))
+      .catch(() => scoreStandaloneRhythm(wav, sentence))
+  ]);
+  const recognized = localAssessment?.recognized || (deviceAIConfig.apiKey ? await requestCloudTranscription(wav).catch(() => "") : "");
+  const textScore = localAssessment?.completenessScore ?? (recognized ? scoreTextMatch(sentence, recognized).score : null);
   const recordingId = `shadow:${activeCourse()}:${Date.now()}`;
   await saveSpeakingRecording(recordingId, wav, { kind: "shadow", sentence }).catch(() => {});
   const result = {
     textScore,
+    phonemeScore: localAssessment?.accuracyScore ?? null,
     soundScore: acoustic.soundScore ?? null,
     rhythmScore: acoustic.rhythmScore,
-    score: combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore, sentence: true }),
+    score: localAssessment?.score ?? combinedPronunciationScore({ textScore, soundScore: acoustic.soundScore, rhythmScore: acoustic.rhythmScore, sentence: true }),
     recognized,
-    basic: !Number.isFinite(acoustic.soundScore),
+    phonemes: localAssessment?.phonemes || [],
+    provider: localAssessment?.provider || "local-acoustic",
+    basic: !localAssessment && !Number.isFinite(acoustic.soundScore),
     recordingId,
     createdAt: new Date().toISOString()
   };

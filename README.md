@@ -65,6 +65,8 @@ ZHIPU_MODEL=glm-5.3-flash
 
 默认备用模型为 `qwen3.5:2b`，适合日常对话的速度与中英文纠错。如需更高质量，可在 `.env.local` 中添加 `OLLAMA_MODEL=qwen3.5:4b`。`.env.local` 已加入 `.gitignore`，不会被 Git 提交。AI 服务未启动时，其余学习功能仍可正常使用。
 
+本机可选的逐音素评测使用 MIT 许可的 [OpenPronounce](https://github.com/Halleck45/OpenPronounce)，与 Ollama 文字模型相互独立。当前 Windows 安装约定为 `D:\MoguSpeech`：Python 环境位于 `.venv`，Hugging Face 模型位于 `models`，eSpeak NG 位于 `espeak`。`server.mjs` 会在本机版启动时自动拉起仅监听 `127.0.0.1:4175` 的音素服务；音素引擎不可用时，应用仍会回退到原有的内容、频谱和节奏评分。该本地引擎只供电脑本机版使用，GitHub Pages 手机版不会把录音发送回电脑。
+
 打开 **AI 对话 → 语音对话**，点击“开始语音练习”并允许麦克风即可。选择智谱云识别时，说完点击“发送这句”；选择浏览器识别时，说完停顿即可。AI 只展示真正需要修改的句子，表达正确时不再出现“无需修改”的纠错卡片。录音只用于当次识别，不会保存。
 
 ## 手机与电脑自动同步

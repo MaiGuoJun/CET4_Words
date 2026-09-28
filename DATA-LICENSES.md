@@ -47,6 +47,13 @@
 - 用途：在用户已配置自己的 API Key 时，为缺少真人录音的单词生成明确标注的自然语音，并作为本地声学纠音的标准音。
 - 许可与费用：遵循用户自己的智谱账户条款和额度；音频按需生成，不随仓库分发。
 
+## 本地逐音素评测（电脑端可选）
+
+- OpenPronounce：<https://github.com/Halleck45/OpenPronounce>，MIT License；用于把实际听到的音素与目标读音对齐，并生成问题音素提示。
+- Wav2Vec2 音素模型：<https://huggingface.co/facebook/wav2vec2-lv-60-espeak-cv-ft>，Apache License 2.0；模型只下载到用户电脑的 `D:\MoguSpeech\models`，不随本仓库分发。
+- eSpeak NG：<https://github.com/espeak-ng/espeak-ng>；作为独立的本地文字转音素组件安装到 `D:\MoguSpeech\espeak`，遵循其上游许可，不打包进本仓库。
+- 限制：这是面向学习反馈的本地启发式评测，并非考试官方评分。短词、强口音或嘈杂录音可能误报，因此界面同时保留录音内容、声学相似度和节奏信息供交叉判断。
+
 ## 高频短语
 
 `scripts/build-data.mjs` 中的高频搭配由本项目整理；排除小学基础词后，当前主背词库保留 130 条，可随应用代码按 MIT License 使用。
