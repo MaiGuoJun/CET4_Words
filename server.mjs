@@ -468,6 +468,7 @@ async function handleAIChat(request, response) {
   } catch (error) {
     return json(response, error.message === "PAYLOAD_TOO_LARGE" ? 413 : 400, { error: "对话内容格式不正确或过长。" });
   }
+  const providerPreference = body.provider === "ollama" || body.provider === "zhipu" ? body.provider : "auto";
 
   if (body.task === "translation-prompt") {
     const topics = {
@@ -493,11 +494,12 @@ Return only valid JSON: {"title":"short Chinese title","source":"Chinese paragra
     const failures = [];
     try {
       let completion;
-      if (ZHIPU_API_KEY) {
+      if (providerPreference !== "ollama" && ZHIPU_API_KEY) {
         try { completion = await requestZhipu(messages, 4096); }
         catch (error) { failures.push(error); }
       }
-      if (!completion) completion = await requestOllama(messages, 800);
+      if (!completion && providerPreference !== "zhipu") completion = await requestOllama(messages, 800);
+      if (!completion) throw new Error("ZHIPU_NOT_CONFIGURED_OR_UNAVAILABLE");
       const result = parseTranslationPrompt(completion.content);
       return json(response, 200, { ...result, provider: completion.provider, model: completion.model });
     } catch (error) {
@@ -519,11 +521,12 @@ Return only valid JSON: {"title":"short Chinese title","source":"Chinese paragra
     const failures = [];
     try {
       let completion;
-      if (ZHIPU_API_KEY) {
+      if (providerPreference !== "ollama" && ZHIPU_API_KEY) {
         try { completion = await requestZhipu(messages, 4096); }
         catch (error) { failures.push(error); }
       }
-      if (!completion) completion = await requestOllama(messages, 1400);
+      if (!completion && providerPreference !== "zhipu") completion = await requestOllama(messages, 1400);
+      if (!completion) throw new Error("ZHIPU_NOT_CONFIGURED_OR_UNAVAILABLE");
       const result = parseWritingReview(completion.content);
       return json(response, 200, { ...result, provider: completion.provider, model: completion.model });
     } catch (error) {
@@ -564,7 +567,7 @@ Return only a valid JSON object with this shape: {"reply":"English reply","trans
   const failures = [];
   try {
     let completion;
-    if (ZHIPU_API_KEY) {
+    if (providerPreference !== "ollama" && ZHIPU_API_KEY) {
       try {
         completion = await requestZhipu(messages);
       } catch (error) {
@@ -572,7 +575,8 @@ Return only a valid JSON object with this shape: {"reply":"English reply","trans
         console.error("Zhipu request failed; trying local fallback:", error.message);
       }
     }
-    if (!completion) completion = await requestOllama(messages);
+    if (!completion && providerPreference !== "zhipu") completion = await requestOllama(messages);
+    if (!completion) throw new Error("ZHIPU_NOT_CONFIGURED_OR_UNAVAILABLE");
     const result = parseTutorReply(completion.content);
     if (!result.reply) return json(response, 502, { error: "AI 没有生成有效回复，请再试一次。" });
     return json(response, 200, { ...result, provider: completion.provider, model: completion.model });
@@ -583,9 +587,13 @@ Return only a valid JSON object with this shape: {"reply":"English reply","trans
     return json(response, 502, {
       error: timedOut
         ? "AI 回复超时，请稍后再试。"
-        : ZHIPU_API_KEY
-          ? "智谱暂时不可用，本地备用模型也未能连接。"
-          : "无法连接本地 AI，请确认 Ollama 已安装并正在运行。"
+        : providerPreference === "ollama"
+          ? "无法连接本地 4B，请确认电脑上的 Ollama 已启动。"
+          : providerPreference === "zhipu"
+            ? "智谱 GLM 暂时不可用或尚未配置。"
+            : ZHIPU_API_KEY
+              ? "智谱暂时不可用，本地备用模型也未能连接。"
+              : "无法连接本地 AI，请确认 Ollama 已安装并正在运行。"
     });
   }
 }

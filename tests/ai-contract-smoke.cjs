@@ -90,8 +90,14 @@ requireText(worker, 'url.pathname === "/voice-session"', "short-lived Doubao voi
 requireText(worker, 'url.pathname === "/doubao-realtime"', "Doubao WebSocket gateway");
 requireText(worker, 'headers["X-Api-Key"] = apiKey', "new Doubao API key authentication");
 requireText(worker, '"X-Api-Access-Key"', "server-side Doubao credentials");
-requireText(html, "doubao-realtime.js?v=65", "v65 Doubao client cache bust");
-requireText(html, "app.js?v=65", "v65 script cache bust");
+requireText(html, "doubao-realtime.js?v=66", "v66 Doubao client cache bust");
+requireText(html, "app.js?v=66", "v66 script cache bust");
+requireText(html, 'id="aiProviderSelect"', "AI provider selector");
+requireText(html, '<option value="ollama">本地 4B</option>', "local 4B provider option");
+requireText(app, 'body: JSON.stringify({ ...payload, provider })', "provider preference in chat request");
+requireText(app, "if (useDoubaoVoice())", "explicit Doubao voice selection");
+requireText(server, 'const providerPreference = body.provider === "ollama"', "backend provider selection");
+requireText(server, 'providerPreference !== "ollama" && ZHIPU_API_KEY', "forced local provider routing");
 requireText(html, 'id="doubaoBudgetRemaining"', "Doubao budget protection panel");
 requireText(html, 'id="doubaoBalanceInput"', "manual Doubao balance calibration");
 requireText(app, "defaultDoubaoBudget", "persistent Doubao budget defaults");

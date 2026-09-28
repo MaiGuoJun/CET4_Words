@@ -164,7 +164,8 @@ const defaultDoubaoBudget = () => ({
   sessionMinuteLimit: 5,
   sessions: []
 });
-const defaultAIState = () => ({ scenario: "campus", mode: "text", sessions: {}, writingReviews: [], speakingSessions: [], speakingBaseline: null, doubaoBudget: defaultDoubaoBudget() });
+const AI_PROVIDER_OPTIONS = new Set(["auto", "ollama", "zhipu", "doubao"]);
+const defaultAIState = () => ({ scenario: "campus", mode: "text", provider: "auto", sessions: {}, writingReviews: [], speakingSessions: [], speakingBaseline: null, doubaoBudget: defaultDoubaoBudget() });
 const defaultVocabAssessment = () => ({
   status: "idle",
   version: 1,
@@ -243,6 +244,7 @@ let aiPending = false;
 let translationPromptPending = false;
 let aiServiceStatus = "checking";
 let aiServiceInfo = null;
+let aiServiceAvailability = null;
 let aiBackendAvailable = false;
 let deviceAIConfig = loadDeviceAIConfig();
 let aiTextSpeech = { utterance: null, audio: null, objectUrl: null, loading: false, messageIndex: null };
@@ -3325,10 +3327,43 @@ function ensureAIState() {
   if (!state.ai || typeof state.ai !== "object") state.ai = defaultAIState();
   if (!AI_SCENARIOS[state.ai.scenario]) state.ai.scenario = "campus";
   if (!["speaking", "text", "voice", "writing"].includes(state.ai.mode)) state.ai.mode = "text";
+  if (!AI_PROVIDER_OPTIONS.has(state.ai.provider)) state.ai.provider = "auto";
   if (!state.ai.sessions || typeof state.ai.sessions !== "object" || Array.isArray(state.ai.sessions)) state.ai.sessions = {};
   if (!Array.isArray(state.ai.writingReviews)) state.ai.writingReviews = [];
   if (!Array.isArray(state.ai.speakingSessions)) state.ai.speakingSessions = [];
   if (state.ai.speakingBaseline && typeof state.ai.speakingBaseline !== "object") state.ai.speakingBaseline = null;
+}
+
+function selectedAIProvider() {
+  ensureAIState();
+  return state.ai.provider;
+}
+
+function backendAIProvider() {
+  const provider = selectedAIProvider();
+  return provider === "ollama" || provider === "zhipu" ? provider : "auto";
+}
+
+function useDoubaoVoice() {
+  const provider = selectedAIProvider();
+  return provider === "doubao" || (provider === "auto" && Boolean(syncConfig.endpoint && syncConfig.token));
+}
+
+function setAIProvider(provider) {
+  if (!AI_PROVIDER_OPTIONS.has(provider) || aiPending) return;
+  if (isVoiceActive()) return toast("请先结束语音对话", "结束后再切换 AI 引擎。" );
+  if (speakingSession.active) return toast("请先结束 15 分钟训练", "训练结束后再切换 AI 引擎。" );
+  state.ai.provider = provider;
+  if (provider === "doubao") state.ai.mode = "voice";
+  saveState();
+  renderAI();
+  const notices = {
+    auto: ["已使用自动选择", "文字优先智谱，语音实战优先豆包，失败时按可用服务处理。"],
+    ollama: ["已切换到本地 4B", "回答由电脑上的 Qwen 生成；手机需保持 Tailscale 连接，电脑需保持开机。"],
+    zhipu: ["已切换到智谱 GLM", "文字回答和普通语音链路将使用智谱。"],
+    doubao: ["已切换到豆包实时语音", "只有开始语音实战后才会消耗豆包实时语音额度。"]
+  };
+  toast(...notices[provider]);
 }
 
 function currentAISession() {
@@ -3438,9 +3473,18 @@ function renderAITranslation(message, index) {
 function renderAI() {
   const messages = currentAISession();
   const scenario = AI_SCENARIOS[state.ai.scenario];
+  const providerChoice = selectedAIProvider();
   $("#aiScenarioTitle").textContent = scenario.title;
   $("#aiScenarioGoal").textContent = scenario.goal;
   $("#aiTurnCount").textContent = `${messages.filter((message) => message.role === "user").length} 轮`;
+  $("#aiProviderSelect").value = providerChoice;
+  const providerHints = {
+    auto: "文字优先智谱，语音实战优先豆包；不可用时自动回退。",
+    ollama: "强制由电脑上的 Qwen 4B 生成回答；不会消耗豆包额度。",
+    zhipu: "强制使用智谱 GLM；不会进入豆包实时语音。",
+    doubao: "仅用于低延迟语音实战；选择后会自动进入语音模式。"
+  };
+  $("#aiProviderHint").textContent = providerHints[providerChoice];
   $$('[data-ai-scenario]').forEach((button) => button.classList.toggle("active", button.dataset.aiScenario === state.ai.scenario));
   $$('[data-ai-mode]').forEach((button) => {
     const active = button.dataset.aiMode === state.ai.mode;
@@ -3454,15 +3498,31 @@ function renderAI() {
   $("#aiReset").hidden = ["writing", "speaking"].includes(state.ai.mode);
 
   const status = $("#aiStatus");
-  status.classList.toggle("ready", aiServiceStatus === "ready");
-  status.classList.toggle("offline", aiServiceStatus === "offline");
-  const providerName = aiServiceInfo?.provider === "zhipu"
-    ? aiServiceInfo?.transport === "direct" ? "智谱直连" : "智谱"
-    : aiServiceInfo?.provider === "ollama" ? "本地" : "AI";
-  const modelName = String(aiServiceInfo?.model || "").replace(/^glm-/i, "GLM-");
-  status.textContent = aiServiceStatus === "ready"
-    ? `${providerName} ${modelName} 已就绪`.replace(/\s+/g, " ")
-    : aiServiceStatus === "offline" ? "需要启动 AI 服务" : "正在检查 AI 服务";
+  const localInfo = aiServiceAvailability?.provider === "ollama" ? aiServiceAvailability : aiServiceAvailability?.fallback;
+  const zhipuReady = aiServiceAvailability?.provider === "zhipu" || Boolean(deviceAIConfig.apiKey);
+  const localReady = Boolean(aiBackendAvailable && localInfo?.configured && localInfo?.running !== false);
+  const doubaoReady = Boolean(syncConfig.endpoint && syncConfig.token);
+  let statusReady = aiServiceStatus === "ready";
+  let statusText = "正在检查 AI 服务";
+  if (providerChoice === "ollama") {
+    statusReady = localReady;
+    statusText = localReady ? `本地 ${localInfo?.model || "Qwen 4B"} 已就绪` : "本地 4B 需要电脑与 Tailscale";
+  } else if (providerChoice === "zhipu") {
+    statusReady = zhipuReady;
+    statusText = zhipuReady ? "智谱 GLM 已就绪" : "智谱尚未配置";
+  } else if (providerChoice === "doubao") {
+    statusReady = doubaoReady;
+    statusText = doubaoReady ? "豆包实时语音已配置" : "豆包实时语音尚未配置";
+  } else if (aiServiceStatus === "ready") {
+    const providerName = aiServiceInfo?.provider === "zhipu"
+      ? aiServiceInfo?.transport === "direct" ? "智谱直连" : "智谱"
+      : aiServiceInfo?.provider === "ollama" ? "本地" : "AI";
+    const modelName = String(aiServiceInfo?.model || "").replace(/^glm-/i, "GLM-");
+    statusText = `${providerName} ${modelName} 已就绪`.replace(/\s+/g, " ");
+  } else if (aiServiceStatus === "offline") statusText = "需要启动 AI 服务";
+  status.classList.toggle("ready", statusReady);
+  status.classList.toggle("offline", !statusReady && aiServiceStatus !== "checking");
+  status.textContent = statusText;
 
   $("#aiMessages").innerHTML = messages.map((message, index) => `
     <div class="ai-message ${message.role === "user" ? "user" : "assistant"} ${index === messages.length - 1 ? "latest" : ""}">
@@ -3639,6 +3699,16 @@ function recordDoubaoBudgetSession(reason = "ended") {
 function renderVoiceUI() {
   const stage = $("#aiVoiceStage");
   if (!stage) return;
+  const providerChoice = selectedAIProvider();
+  const realtimeDoubao = useDoubaoVoice();
+  const budgetPanel = $("#doubaoBudgetPanel");
+  if (budgetPanel) budgetPanel.hidden = !realtimeDoubao;
+  const privacy = $("#aiVoicePrivacy");
+  if (privacy) privacy.textContent = realtimeDoubao
+    ? "本次使用豆包端到端实时语音，最多 5 分钟、8 轮；录音只用于当次对话，不会保存。"
+    : providerChoice === "ollama"
+      ? "本次回答由电脑上的本地 Qwen 4B 生成；语音转文字使用当前设备的识别方式，回复使用系统或已配置声音朗读，不消耗豆包额度。"
+      : "本次回答由智谱 GLM 生成；语音转文字和朗读按设置执行，不消耗豆包实时语音额度。";
   const labels = {
     idle: [voiceSession.statusMessage, voiceSession.hintMessage],
     connecting: ["正在启动语音练习…", voiceSession.doubao ? "正在建立豆包实时语音连接；首次使用时请允许麦克风。" : "首次使用时，请允许浏览器访问麦克风。"],
@@ -3674,7 +3744,7 @@ function renderVoiceUI() {
   toggle.disabled = ["connecting", "processing", "thinking"].includes(voiceSession.state);
   const endButton = $("#aiVoiceEnd");
   if (endButton) endButton.hidden = !active;
-  renderDoubaoBudget();
+  if (realtimeDoubao) renderDoubaoBudget();
 }
 
 function closeVoiceResources() {
@@ -5054,14 +5124,16 @@ async function requestDirectTranslationPrompt(topic) {
 
 async function requestTranslationPrompt(topic) {
   let backendError = null;
+  const provider = backendAIProvider();
   if (aiBackendAvailable) {
     try {
-      const response = await fetch("./api/ai-chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task: "translation-prompt", topic }) });
+      const response = await fetch("./api/ai-chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task: "translation-prompt", topic, provider }) });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "AI 出题失败，请稍后重试。");
       return result;
     } catch (error) { backendError = error; }
   }
+  if (provider === "ollama") throw backendError || new Error("本地 4B 需要通过 Tailscale 地址连接已开机的电脑。" );
   if (deviceAIConfig.apiKey) return requestDirectTranslationPrompt(topic);
   throw backendError || new Error("请先在设置中配置手机 AI，或在电脑上启动本机服务。");
 }
@@ -5118,14 +5190,16 @@ async function requestDirectWritingReview({ type, prompt, text }) {
 
 async function requestWritingReview(payload) {
   let backendError = null;
+  const provider = backendAIProvider();
   if (aiBackendAvailable) {
     try {
-      const response = await fetch("./api/ai-chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task: "writing", ...payload }) });
+      const response = await fetch("./api/ai-chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task: "writing", provider, ...payload }) });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "AI 批改失败，请稍后重试。" );
       return result;
     } catch (error) { backendError = error; }
   }
+  if (provider === "ollama") throw backendError || new Error("本地 4B 需要通过 Tailscale 地址连接已开机的电脑。" );
   if (deviceAIConfig.apiKey) return requestDirectWritingReview(payload);
   throw backendError || new Error("请先在设置中配置手机 AI，或在电脑上启动本机服务。" );
 }
@@ -5242,12 +5316,13 @@ async function requestDirectZhipu({ scenario, history, message, training = null 
 
 async function requestAIReply(payload) {
   let backendError = null;
+  const provider = backendAIProvider();
   if (aiBackendAvailable) {
     try {
       const response = await fetch("./api/ai-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ ...payload, provider })
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "AI 暂时无法回复，请稍后重试。");
@@ -5256,6 +5331,7 @@ async function requestAIReply(payload) {
       backendError = error;
     }
   }
+  if (provider === "ollama") throw backendError || new Error("本地 4B 需要通过 Tailscale 地址连接已开机的电脑。" );
   if (deviceAIConfig.apiKey) return requestDirectZhipu(payload);
   throw backendError || new Error("请先在设置中配置手机 AI，或在电脑上启动本机服务。");
 }
@@ -5732,7 +5808,7 @@ async function ensureDoubaoRealtimeClient() {
   }
   await new Promise((resolve) => {
     const script = document.createElement("script");
-    script.src = new URL("./doubao-realtime.js?v=64-retry", window.location.href).href;
+    script.src = new URL("./doubao-realtime.js?v=66-retry", window.location.href).href;
     script.defer = true;
     script.dataset.doubaoRetry = "true";
     script.addEventListener("load", () => {
@@ -5747,7 +5823,10 @@ async function ensureDoubaoRealtimeClient() {
 }
 
 async function startVoiceConversation() {
-  if (syncConfig.endpoint && syncConfig.token) {
+  if (useDoubaoVoice()) {
+    if (!syncConfig.endpoint || !syncConfig.token) {
+      return failVoiceSession("豆包实时语音尚未配置", "请先在设置中连接 Cloudflare 同步地址，或者把 AI 引擎切换为本地 4B。" );
+    }
     if (!confirmDoubaoBudgetStart()) return;
     if (!await ensureDoubaoRealtimeClient()) {
       return failVoiceSession("豆包语音组件未加载", "请刷新 Pages 页面后重试；若仍失败，把这条提示发给我。" );
@@ -5801,12 +5880,14 @@ async function checkAIStatus() {
     const response = await fetch("./api/ai-status", { cache: "no-store" });
     if (!response.ok) throw new Error("status unavailable");
     const result = await response.json();
+    aiServiceAvailability = result;
     aiBackendAvailable = Boolean(result.configured);
     aiServiceInfo = aiBackendAvailable
       ? result
       : deviceAIConfig.apiKey ? { provider: "zhipu", model: deviceAIConfig.model, transport: "direct" } : result;
     aiServiceStatus = aiBackendAvailable || deviceAIConfig.apiKey ? "ready" : "offline";
   } catch {
+    aiServiceAvailability = null;
     aiServiceInfo = deviceAIConfig.apiKey
       ? { provider: "zhipu", model: deviceAIConfig.model, transport: "direct" }
       : null;
@@ -6451,6 +6532,7 @@ function bindEvents() {
   });
   $("#audioImportForm").addEventListener("submit", importAudio);
 
+  $("#aiProviderSelect").addEventListener("change", (event) => setAIProvider(event.target.value));
   $$('[data-ai-scenario]').forEach((button) => button.addEventListener("click", () => selectAIScenario(button.dataset.aiScenario)));
   $$('[data-ai-mode]').forEach((button) => button.addEventListener("click", () => setAIMode(button.dataset.aiMode)));
   $("#aiReset").addEventListener("click", resetAIConversation);
