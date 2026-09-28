@@ -448,7 +448,7 @@ async function requestOllama(messages, numPredict = 360) {
       stream: false,
       think: false,
       format: "json",
-      keep_alive: "10m",
+      keep_alive: "30m",
       options: { temperature: 0.55, num_predict: numPredict }
     }),
     signal: AbortSignal.timeout(120000)
@@ -564,6 +564,18 @@ The app supports voice: it displays your English reply and a separate text-to-sp
 Return only a valid JSON object with this shape: {"reply":"English reply","translation":"complete natural Chinese translation of reply","feedback":[{"original":"one complete learner sentence that contains an actual error","correction":"natural corrected sentence","reason":"brief Chinese explanation"}],"vocabulary":[{"word":"useful word or phrase","meaning":"brief Chinese meaning","example":"short English example"}]}. The translation must match the reply exactly in meaning. Feedback must contain only sentences that genuinely need correction; omit natural/correct sentences completely, and return an empty feedback array when there is no error. Include at most ${training ? "two" : "eight"} feedback items and two vocabulary items.`;
 
   const messages = [{ role: "system", content: instructions }, ...history, { role: "user", content: message }];
+  const localInstructions = `You are a friendly English conversation partner for one Chinese CET-4 learner. Continue the conversation naturally before doing any correction.
+
+Return JSON only: {"reply":"English conversational response","translation":"Chinese translation of reply","feedback":[{"original":"learner error","correction":"corrected English","reason":"short Chinese reason"}],"vocabulary":[{"word":"useful phrase","meaning":"short Chinese meaning","example":"short English example"}]}.
+
+Strict rules:
+- reply must respond to the learner's meaning and ask one natural short follow-up question. Never use reply merely to correct or rewrite the learner's sentence.
+- Keep reply to 1–2 sentences and at most 30 English words.
+- Put correction only in feedback. Include at most ONE important real error; use [] when the sentence is natural.
+- Include at most ONE vocabulary item.
+- translation must match reply exactly. Do not add labels or markdown.
+${training?.mode === "speaking" ? `This is a structured speaking turn (${training.phase}). Prompt: ${training.prompt}. ${training.retry ? "This is a retry; acknowledge it briefly and do not change topic." : "Keep the lesson moving with one short question."}` : training?.mode === "voice-review" ? `The spoken AI answer was exactly: ${training.assistantReply}. Copy that exact answer into reply and only add its translation and transcript-based correction.` : ""}`;
+  const localMessages = [{ role: "system", content: localInstructions }, ...history.slice(-6), { role: "user", content: message }];
   const failures = [];
   try {
     let completion;
@@ -575,7 +587,7 @@ Return only a valid JSON object with this shape: {"reply":"English reply","trans
         console.error("Zhipu request failed; trying local fallback:", error.message);
       }
     }
-    if (!completion && providerPreference !== "zhipu") completion = await requestOllama(messages);
+    if (!completion && providerPreference !== "zhipu") completion = await requestOllama(localMessages, 220);
     if (!completion) throw new Error("ZHIPU_NOT_CONFIGURED_OR_UNAVAILABLE");
     const result = parseTutorReply(completion.content);
     if (!result.reply) return json(response, 502, { error: "AI 没有生成有效回复，请再试一次。" });

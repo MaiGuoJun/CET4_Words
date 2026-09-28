@@ -98,6 +98,9 @@ requireText(app, 'body: JSON.stringify({ ...payload, provider })', "provider pre
 requireText(app, "if (useDoubaoVoice())", "explicit Doubao voice selection");
 requireText(server, 'const providerPreference = body.provider === "ollama"', "backend provider selection");
 requireText(server, 'providerPreference !== "ollama" && ZHIPU_API_KEY', "forced local provider routing");
+requireText(server, "Never use reply merely to correct or rewrite", "local model conversation-first rule");
+requireText(server, "requestOllama(localMessages, 220)", "short local conversation response budget");
+requireText(server, 'keep_alive: "30m"', "longer local model residency");
 requireText(html, 'id="doubaoBudgetRemaining"', "Doubao budget protection panel");
 requireText(html, 'id="doubaoBalanceInput"', "manual Doubao balance calibration");
 requireText(app, "defaultDoubaoBudget", "persistent Doubao budget defaults");
