@@ -327,6 +327,22 @@ async function handleLocalPhonemeAssessment(request, response, requestUrl) {
   }
 }
 
+function ensureChineseFeedbackReason(reason, original = "", correction = "") {
+  const value = String(reason || "").trim();
+  if (/[\u3400-\u9fff]/.test(value)) return value.slice(0, 300);
+  const signal = `${value} ${original} ${correction}`.toLowerCase();
+  const explanations = [];
+  if (/tense|past|present|future|yesterday|tomorrow|time expression/.test(signal)) explanations.push("时态需要与句子中的时间表达保持一致");
+  if (/article|\bdeterminer\b|\ba\/an\b|add (?:an? |the )?article/.test(signal)) explanations.push("可数名词前需要使用合适的冠词");
+  if (/subject.?verb|agreement|third.person|singular verb/.test(signal)) explanations.push("主语和谓语需要在人称和单复数上保持一致");
+  if (/preposition|collocation|word choice|natural expression|idiomatic/.test(signal)) explanations.push("这里的介词或词语搭配不够自然");
+  if (/plural|singular|countable|uncountable/.test(signal)) explanations.push("名词的单复数或可数性需要调整");
+  if (/word order|sentence order|position/.test(signal)) explanations.push("这里的英语语序需要调整");
+  if (/infinitive|gerund|verb form|participle/.test(signal)) explanations.push("这里需要使用正确的动词形式");
+  if (/spelling|spell/.test(signal)) explanations.push("这里存在拼写错误");
+  return (explanations.length ? [...new Set(explanations)].join("；") : "这里的语法或搭配不够自然，建议使用修正后的表达").slice(0, 300);
+}
+
 function parseTutorReply(text) {
   const cleaned = String(text || "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   const start = cleaned.indexOf("{");
@@ -339,7 +355,7 @@ function parseTutorReply(text) {
       feedback: Array.isArray(result.feedback) ? result.feedback.map((item) => ({
         original: String(item?.original || "").slice(0, 300),
         correction: String(item?.correction || "").slice(0, 300),
-        reason: String(item?.reason || "").slice(0, 300)
+        reason: ensureChineseFeedbackReason(item?.reason, item?.original, item?.correction)
       })).filter((item) => {
         if (!item.correction) return false;
         const original = item.original.trim().replace(/\s+/g, " ").toLowerCase();

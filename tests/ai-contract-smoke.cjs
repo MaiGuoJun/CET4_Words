@@ -101,6 +101,8 @@ requireText(server, 'providerPreference !== "ollama" && ZHIPU_API_KEY', "forced 
 requireText(server, "Never use reply merely to correct or rewrite", "local model conversation-first rule");
 requireText(server, "requestOllama(localMessages, 220)", "short local conversation response budget");
 requireText(server, 'keep_alive: "30m"', "longer local model residency");
+requireText(server, "ensureChineseFeedbackReason", "Chinese feedback reason fallback");
+requireText(server, "时态需要与句子中的时间表达保持一致", "Chinese tense explanation");
 requireText(html, 'id="doubaoBudgetRemaining"', "Doubao budget protection panel");
 requireText(html, 'id="doubaoBalanceInput"', "manual Doubao balance calibration");
 requireText(app, "defaultDoubaoBudget", "persistent Doubao budget defaults");
